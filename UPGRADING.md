@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### The redirect policy is enforced by the gateway
+
+The redirect settings of a session are a policy of the gateway now and not a
+default of the client. Three things changed:
+
+* The resolved policy is signed into the gateway access token and replayed
+  in the tunnel authorization response. The restriction stays bound to the
+  user the `.rdp` file was issued for.
+* The generated `.rdp` file is rewritten so that its redirect settings match
+  the policy. The file now always carries `redirectclipboard`,
+  `redirectprinters`, `redirectcomports`, `redirectsmartcards`,
+  `redirectwebauthn`, `redirectlocation`, `drivestoredirect`,
+  `devicestoredirect`, `camerastoredirect` and `usbdevicestoredirect`.
+* The redirect settings can no longer be overridden through the
+  `/connect` URL query parameters. A request that tries to do so is
+  rejected with `400 Bad Request`, also when the key is listed in
+  `Client.RdpOverridableKeys`. Remove the redirect keys from that list,
+  they have no effect anymore.
+
+The smartcard, WebAuthn and location redirection are part of the policy now
+and are denied by default. Set `Caps.EnableSmartCard`,
+`Caps.EnableWebAuthn` or `Caps.EnableLocation` to `true` to allow them.
+
+### The lifetime of the credentials is configurable
+
+The gateway access token that is embedded in the `.rdp` file expires after
+five minutes. That lifetime is now configurable:
+
+```yaml
+Security:
+  # the lifetime of the gateway access token in minutes, the default is 5
+  PAATokenLifetime: 60
+  # the lifetime of the user token in minutes, the default is 5
+  UserTokenLifetime: 60
+  # the lifetime of the host selection query token in minutes, the default is 5
+  QueryTokenLifetime: 5
+
+Server:
+  # the lifetime of the browser session in seconds, the default is 120
+  SessionLifetime: 300
+```
+
+A longer lifetime of the gateway access token widens the window in which a
+stolen `.rdp` file can be used. The gateway keeps verifying the IP address
+of the client (`Security.VerifyClientIp`) and the host of the token.
+
+Note that `Server.MaxSessionLength` is not a lifetime, it is the maximum
+size in bytes of a session in the filesystem session store.
+
 ### Container image no longer bakes a TLS cert and runs as UID 1001
 
 Two changes to `dev/docker/Dockerfile` and the dev image's entrypoint:

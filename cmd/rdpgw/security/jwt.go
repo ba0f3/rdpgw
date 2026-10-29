@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/access"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/identity"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/protocol"
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -27,12 +28,31 @@ var (
 	Oauth2Config      oauth2.Config
 )
 
-var ExpiryTime time.Duration = 5
+// The lifetimes of the credentials the gateway hands out. They are set from
+// the configuration during startup and are expressed in minutes.
+var (
+	// PAATokenLifetime is the lifetime of the gateway access token in
+	// minutes. This is the credential that is embedded in the .rdp file, it
+	// determines how long a downloaded .rdp file stays usable.
+	PAATokenLifetime = 5
+
+	// UserTokenLifetime is the lifetime of the user token in minutes.
+	UserTokenLifetime = 5
+
+	// QueryTokenLifetime is the lifetime of the token that carries the
+	// host selection of a signed query in minutes.
+	QueryTokenLifetime = 5
+)
+
 var VerifyClientIP bool = true
 
 type customClaims struct {
 	RemoteServer string `json:"remoteServer"`
 	ClientIP     string `json:"clientIp"`
+	// Redirect is the redirect policy that applies to the session. It is
+	// signed into the token so that the gateway enforces the policy that
+	// was applied when the .rdp file was handed out.
+	Redirect *access.Policy `json:"redirect,omitempty"`
 }
 
 func CheckSession(next protocol.CheckHostFunc) protocol.CheckHostFunc {
@@ -108,6 +128,14 @@ func CheckPAACookie(ctx context.Context, tokenString string) (bool, error) {
 	tunnel.RemoteAddr = custom.ClientIP
 	tunnel.User.SetUserName(standard.Subject)
 
+	// The redirect policy of the session is signed into the token. It is
+	// the policy that was resolved for the user when the .rdp file was
+	// handed out, so the client cannot widen it.
+	if custom.Redirect != nil {
+		flags := protocol.RedirectFlagsFromPolicy(*custom.Redirect)
+		tunnel.RedirectFlags = &flags
+	}
+
 	return true, nil
 }
 
@@ -124,14 +152,29 @@ func GeneratePAAToken(ctx context.Context, username string, server string) (stri
 	standard := jwt.Claims{
 		Issuer:   "rdpgw",
 		Audience: jwt.Audience{paaAudience},
-		Expiry:   jwt.NewNumericDate(time.Now().Add(time.Minute * 5)),
+		Expiry:   jwt.NewNumericDate(time.Now().Add(time.Minute * time.Duration(PAATokenLifetime))),
 		Subject:  username,
 	}
 
 	id := identity.FromCtx(ctx)
+
+	clientIP := ""
+	if id != nil {
+		if ip, ok := id.GetAttribute(identity.AttrClientIp).(string); ok {
+			clientIP = ip
+		}
+	}
+
+	// The redirect policy of the user is signed into the token. The
+	// gateway replays it in the tunnel authorization response which makes
+	// the restriction a policy of the gateway instead of a setting of the
+	// client.
+	policy := access.Current().PolicyFor(id)
+
 	private := customClaims{
 		RemoteServer: server,
-		ClientIP:     id.GetAttribute(identity.AttrClientIp).(string),
+		ClientIP:     clientIP,
+		Redirect:     &policy,
 	}
 
 	if token, err := jwt.Signed(sig).Claims(standard).Claims(private).Serialize(); err != nil {
@@ -149,7 +192,7 @@ func GenerateUserToken(ctx context.Context, userName string) (string, error) {
 
 	claims := jwt.Claims{
 		Subject: userName,
-		Expiry:  jwt.NewNumericDate(time.Now().Add(time.Minute * 5)),
+		Expiry:  jwt.NewNumericDate(time.Now().Add(time.Minute * time.Duration(UserTokenLifetime))),
 		Issuer:  "rdpgw",
 	}
 
@@ -266,7 +309,7 @@ func GenerateQueryToken(ctx context.Context, query string, issuer string) (strin
 
 	claims := jwt.Claims{
 		Subject: query,
-		Expiry:  jwt.NewNumericDate(time.Now().Add(time.Minute * 5)),
+		Expiry:  jwt.NewNumericDate(time.Now().Add(time.Minute * time.Duration(QueryTokenLifetime))),
 		Issuer:  issuer,
 	}
 

@@ -520,7 +520,9 @@ func TestHandler_HandleSignedDownload(t *testing.T) {
 			data["full address"], hosts)
 	}
 
-	signscopeWant := "GatewayHostname,Full Address,GatewayCredentialsSource,GatewayProfileUsageMethod,GatewayUsageMethod,Alternate Full Address"
+	// The redirect settings of the file are written by the gateway to
+	// match the access policy of the user, they are part of the signature.
+	signscopeWant := "GatewayHostname,Full Address,GatewayCredentialsSource,GatewayProfileUsageMethod,GatewayUsageMethod,DevicesToRedirect,DrivesToRedirect,RedirectClipboard,RedirectCOMPorts,RedirectPrinters,RedirectSmartCards,Alternate Full Address"
 	if data["signscope"] != signscopeWant {
 		t.Errorf("signscope key in rdp does not match: got %v want %v", data["signscope"], signscopeWant)
 	}

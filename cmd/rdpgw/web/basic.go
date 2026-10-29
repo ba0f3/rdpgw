@@ -35,6 +35,9 @@ func (h *BasicAuthHandler) BasicAuth(next http.HandlerFunc) http.HandlerFunc {
 				id.SetUserName(username)
 				id.SetAuthenticated(true)
 				id.SetAuthTime(time.Now())
+				// the group membership of a previous login does not
+				// apply to this user
+				id.SetGroups(nil)
 				next.ServeHTTP(w, identity.AddToRequestCtx(id, r))
 				return
 			}

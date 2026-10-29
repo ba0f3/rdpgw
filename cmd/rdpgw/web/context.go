@@ -106,6 +106,9 @@ func TransposeSPNEGOContext(next http.Handler) http.Handler {
 			id.SetAuthenticated(gid.Authenticated())
 			id.SetDomain(gid.Domain())
 			id.SetAuthTime(gid.AuthTime())
+			// the group membership of a previous login does not apply to
+			// this user
+			id.SetGroups(nil)
 			r = identity.AddToRequestCtx(id, r)
 		}
 		next.ServeHTTP(w, r)

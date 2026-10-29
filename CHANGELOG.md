@@ -38,9 +38,40 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   See [UPGRADING.md](UPGRADING.md) for migration notes. The other
   host-selection modes (`roundrobin`, `signed`, `unsigned`) already used
   the operator-curated `Server.Hosts` list and are unaffected.
+- The redirect policy of the gateway is enforced as a policy of the gateway
+  and not as a default of the client. The resolved policy is signed into
+  the gateway access token and replayed in the tunnel authorization
+  response, and the generated `.rdp` file is rewritten to match it. The
+  redirect settings of the `.rdp` file can no longer be overridden through
+  the `/connect` URL query parameters, not even when they are listed in
+  `Client.RdpOverridableKeys`. See [UPGRADING.md](UPGRADING.md).
+- The `.rdp` file now always carries the redirect settings of the policy,
+  even when they carry the value the client uses by default.
 
 ### Added
 
+- Access control policy. The `Access` section holds per user and per group
+  rules that narrow the redirect policy of the gateway and restrict the
+  remote hosts a user may connect to. The rules are evaluated in order, the
+  first rule that matches the user applies. The global policy in `Caps` is
+  the ceiling of the deployment, a rule can only narrow it. See
+  [docs/access-control.md](docs/access-control.md).
+- `OpenId.Groups` (`[]string`) restricts the login to the members of the
+  listed groups. A user that is not a member of one of them is refused with
+  `403 Forbidden`. `OpenId.GroupsClaim` (default `groups`) selects the claim
+  that carries the group membership, `OpenId.Scopes` (default
+  `openid profile email`) selects the scopes that are requested from the
+  provider.
+- `Header.GroupsHeader` carries the group membership of the user for header
+  authentication. The value is a comma separated list of group names.
+- `Caps.EnableSmartCard`, `Caps.EnableWebAuthn` and `Caps.EnableLocation`
+  (`bool`, default `false`) add the smartcard, WebAuthn and location
+  redirection to the redirect policy of the gateway.
+- `Security.PAATokenLifetime`, `Security.UserTokenLifetime` and
+  `Security.QueryTokenLifetime` (`int`, minutes, default `5`) make the
+  lifetime of the credentials the gateway hands out configurable.
+- `Server.SessionLifetime` (`int`, seconds, default `120`) makes the
+  lifetime of the browser session configurable.
 - `rdpgw-auth --allow-uid` and `--allow-gid` flags (repeatable).
 - `Server.TrustedProxies` (`[]string`, CIDR, default empty).
 - `Server.AllowedDestinationPorts` (`[]int`, default `[3389]`).

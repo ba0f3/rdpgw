@@ -3,6 +3,7 @@ package rdp
 import (
 	"errors"
 	"fmt"
+	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/access"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/rdp/koanf/parsers/rdp"
 	"github.com/fatih/structs"
 	"github.com/go-viper/mapstructure/v2"
@@ -194,6 +195,9 @@ func (rb *Builder) ApplyOverrides(values map[string][]string, allowed []string) 
 		if !ok {
 			continue
 		}
+		if _, ok := policyControlledKeys[nk]; ok {
+			return fmt.Errorf("rdp option %q is controlled by the gateway access policy and cannot be overridden", k)
+		}
 		if _, ok := allow[nk]; !ok {
 			return fmt.Errorf("rdp option %q is not allowed to be overridden", k)
 		}
@@ -210,6 +214,74 @@ func (rb *Builder) ApplyOverrides(values map[string][]string, allowed []string) 
 		rb.forced[f.Name()] = struct{}{}
 	}
 	return nil
+}
+
+// policyControlledKeys are the RDP settings that the gateway enforces
+// through its access policy. They can never be overridden through the URL,
+// not even when the operator puts them on the allow-list. The redirect
+// policy of the gateway is the authority for these settings, a client that
+// could turn them on would bypass the policy.
+var policyControlledKeys = map[string]struct{}{
+	"redirectclipboard":    {},
+	"redirectprinters":     {},
+	"drivestoredirect":     {},
+	"devicestoredirect":    {},
+	"redirectcomports":     {},
+	"redirectlocation":     {},
+	"redirectsmartcards":   {},
+	"redirectwebauthn":     {},
+	"camerastoredirect":    {},
+	"usbdevicestoredirect": {},
+}
+
+// Force marks the given settings as explicitly set. They are always
+// serialized, even when their value equals the default of the client.
+func (rb *Builder) Force(names ...string) {
+	if rb.forced == nil {
+		rb.forced = make(map[string]struct{})
+	}
+	for _, name := range names {
+		rb.forced[name] = struct{}{}
+	}
+}
+
+// ApplyRedirectPolicy writes the redirect settings of the .rdp file so that
+// they match the access policy of the user. The gateway enforces the very
+// same policy in the tunnel authorization response, the file only makes the
+// client side consistent with the policy of the gateway.
+func (rb *Builder) ApplyRedirectPolicy(policy access.Policy) {
+	rb.Settings.RedirectClipboard = policy.Clipboard
+	rb.Settings.RedirectPrinters = policy.Printer
+	rb.Settings.RedirectComPorts = policy.Port
+	rb.Settings.RedirectSmartcards = policy.SmartCard
+	rb.Settings.RedirectWebAuthn = policy.WebAuthn
+	rb.Settings.RedirectLocation = policy.Location
+	rb.Settings.DriveStoreRedirect = redirectList(policy.Drive)
+	rb.Settings.DeviceStoreRedirect = redirectList(policy.Pnp)
+	rb.Settings.CameraStoreRedirect = redirectList(policy.Pnp)
+	rb.Settings.UsbDeviceStoRedirect = redirectList(policy.Pnp)
+
+	rb.Force(
+		"RedirectClipboard",
+		"RedirectPrinters",
+		"RedirectComPorts",
+		"RedirectSmartcards",
+		"RedirectWebAuthn",
+		"RedirectLocation",
+		"DriveStoreRedirect",
+		"DeviceStoreRedirect",
+		"CameraStoreRedirect",
+		"UsbDeviceStoRedirect",
+	)
+}
+
+// redirectList returns the value of a setting that lists the resources of
+// the client. An empty list disables the redirection.
+func redirectList(enabled bool) string {
+	if enabled {
+		return "*"
+	}
+	return ""
 }
 
 func (rb *Builder) isForced(f *structs.Field) bool {

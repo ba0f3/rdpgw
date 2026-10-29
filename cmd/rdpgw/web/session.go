@@ -10,20 +10,36 @@ import (
 
 const (
 	rdpGwSession     = "RDPGWSESSION"
-	MaxAge           = 120
 	identityKey      = "RDPGWID"
 	maxSessionLength = 8192
+	// defaultSessionLifetime is the lifetime of a session in seconds when
+	// the operator did not configure one.
+	defaultSessionLifetime = 120
 )
+
+// MaxAge is the lifetime of the session in seconds. It is set from the
+// configuration when the session store is initialized.
+var MaxAge = defaultSessionLifetime
 
 var sessionStore sessions.Store
 
-func InitStore(sessionKey []byte, encryptionKey []byte, storeType string, maxLength int) {
+// InitStore initializes the session store. The lifetime is the time the
+// user has to download the .rdp file before the session expires. It is not
+// the lifetime of the gateway credentials in the .rdp file, that one is
+// controlled by security.paatokenlifetime.
+func InitStore(sessionKey []byte, encryptionKey []byte, storeType string, maxLength int, lifetime int) {
 	if len(sessionKey) < 32 {
 		log.Fatal("Session key too small")
 	}
 	if len(encryptionKey) < 32 {
 		log.Fatal("Session key too small")
 	}
+
+	if lifetime <= 0 {
+		lifetime = defaultSessionLifetime
+	}
+	MaxAge = lifetime
+	log.Printf("Setting session lifetime to %d seconds", MaxAge)
 
 	if storeType == "file" {
 		log.Println("Filesystem is used as session storage")

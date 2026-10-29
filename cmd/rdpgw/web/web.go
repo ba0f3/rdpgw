@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/andrewheberle/rdpsign"
+	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/access"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/identity"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/rdp"
 )
@@ -447,16 +448,55 @@ const fallbackHTMLTemplate = `<!DOCTYPE html>
 </body>
 </html>`
 
-func (h *Handler) selectRandomHost() string {
+// selectRandomHost returns one of the hosts the user is allowed to connect
+// to. When the access policy does not restrict the user all configured
+// hosts are candidates.
+func (h *Handler) selectRandomHost(id identity.Identity) string {
+	allowed := access.Current().AllowedHosts(id, h.hosts)
+	if len(allowed) == 0 {
+		return ""
+	}
+
 	r := rnd.New(rnd.NewSource(int64(new(maphash.Hash).Sum64())))
-	host := h.hosts[r.Intn(len(h.hosts))]
+	host := allowed[r.Intn(len(allowed))]
 	return host
 }
 
+// getHost determines the host the client wants to connect to. The
+// selection is made by the host selection mode of the gateway and is then
+// checked against the access policy of the user.
 func (h *Handler) getHost(ctx context.Context, u *url.URL) (string, error) {
+	host, err := h.selectHost(ctx, u)
+	if err != nil {
+		return "", err
+	}
+
+	id := identity.FromCtx(ctx)
+	if id == nil {
+		return host, nil
+	}
+
+	host = strings.Replace(host, "{{ preferred_username }}", id.UserName(), 1)
+
+	// The access policy restricts the hosts a user may connect to. It is
+	// applied to the resolved host so that it also covers the hosts that
+	// carry the user name template.
+	if !access.Current().HostAllowed(id, host) {
+		log.Printf("rejecting host %q for user %q: not allowed by the access policy", host, id.UserName())
+		return "", fmt.Errorf("host %s is not allowed for this user", host)
+	}
+
+	return host, nil
+}
+
+// selectHost applies the host selection mode of the gateway. It does not
+// take the access policy into account.
+func (h *Handler) selectHost(ctx context.Context, u *url.URL) (string, error) {
+	id := identity.FromCtx(ctx)
+
 	switch h.hostSelection {
 	case "roundrobin":
-		return h.selectRandomHost(), nil
+		return h.selectRandomHost(id), nil
 	case "signed":
 		hosts, ok := u.Query()["host"]
 		if !ok {
@@ -502,7 +542,7 @@ func (h *Handler) getHost(ctx context.Context, u *url.URL) (string, error) {
 		}
 		return hosts[0], nil
 	default:
-		return h.selectRandomHost(), nil
+		return h.selectRandomHost(id), nil
 	}
 }
 
@@ -524,7 +564,6 @@ func (h *Handler) HandleDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	host = strings.Replace(host, "{{ preferred_username }}", id.UserName(), 1)
 
 	// split the username into user and domain
 	var user = id.UserName()
@@ -600,6 +639,12 @@ func (h *Handler) HandleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The redirect settings of the file follow the access policy of the
+	// user. The gateway enforces the same policy in the tunnel
+	// authorization response, the file only makes the client side
+	// consistent with it.
+	d.ApplyRedirectPolicy(access.Current().PolicyFor(id))
+
 	if !h.rdpOpts.NoUsername {
 		d.Settings.Username = render
 		if domain != "" {
@@ -661,6 +706,9 @@ func (h *Handler) HandleHostList(w http.ResponseWriter, r *http.Request) {
 
 	var hosts []Host
 
+	// The list only contains the hosts the user is allowed to connect to.
+	allowed := access.Current().AllowedHosts(id, h.hosts)
+
 	// Simplified host selection - all modes work the same for the user
 	if h.hostSelection == "roundrobin" {
 		hosts = append(hosts, Host{
@@ -672,7 +720,7 @@ func (h *Handler) HandleHostList(w http.ResponseWriter, r *http.Request) {
 		})
 	} else {
 		// For all other modes (signed, unsigned, any), show the actual hosts
-		for i, hostAddr := range h.hosts {
+		for i, hostAddr := range allowed {
 			hosts = append(hosts, Host{
 				ID:          fmt.Sprintf("host_%d", i),
 				Name:        hostAddr,

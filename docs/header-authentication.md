@@ -15,6 +15,7 @@ Header:
   UserIdHeader: "X-Forwarded-User-Id"   # Optional: User ID header
   EmailHeader: "X-Forwarded-Email"      # Optional: Email header
   DisplayNameHeader: "X-Forwarded-Name" # Optional: Display name header
+  GroupsHeader: "X-Forwarded-Groups"    # Optional: comma separated groups
   # Required: CIDR allow-list of upstream proxies that may stamp the
   # headers above. Requests arriving from any other RemoteAddr are
   # refused with 401, so the user header cannot be minted by callers
@@ -28,6 +29,12 @@ Caps:
 Security:
   VerifyClientIp: false  # Requests come through proxy
 ```
+
+The value of the groups header is a comma separated list of group names.
+The groups are used by the rules of the `Access` section, see the
+[Access Control Documentation](access-control.md). The proxy must strip
+inbound copies of the headers it stamps, the gateway only looks at the
+values of the request it receives.
 
 ## Proxy Service Examples
 

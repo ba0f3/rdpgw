@@ -35,6 +35,11 @@ type Identity interface {
 	SetEmail(string)
 	Expiry() time.Time
 	SetExpiry(time.Time)
+	// Groups returns the groups the user is a member of. It is used by the
+	// access policy to apply per group restrictions.
+	Groups() []string
+	// SetGroups replaces the group membership of the user.
+	SetGroups([]string)
 	Marshal() ([]byte, error)
 	Unmarshal([]byte) error
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+
+	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/access"
 )
 
 var (
@@ -14,6 +16,18 @@ var (
 )
 
 func CheckHost(ctx context.Context, host string) (bool, error) {
+	s := getTunnel(ctx)
+
+	// The access policy restricts the hosts a user may connect to. It is
+	// applied before the host selection rules because it is the more
+	// specific of the two.
+	if s != nil && s.User != nil {
+		if !access.Current().HostAllowed(s.User, host) {
+			log.Printf("User %s is not allowed to connect to host %s", s.User.UserName(), host)
+			return false, fmt.Errorf("host %s is not allowed for this user", host)
+		}
+	}
+
 	switch HostSelection {
 	case "any":
 		return true, nil
@@ -21,7 +35,10 @@ func CheckHost(ctx context.Context, host string) (bool, error) {
 		// todo get from context?
 		return false, errors.New("cannot verify host in 'signed' mode as token data is missing")
 	case "roundrobin", "unsigned":
-		s := getTunnel(ctx)
+		if s == nil || s.User == nil {
+			return false, errors.New("no valid session info or username found in context")
+		}
+
 		if s.User.UserName() == "" {
 			return false, errors.New("no valid session info or username found in context")
 		}

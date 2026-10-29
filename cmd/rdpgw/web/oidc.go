@@ -23,17 +23,36 @@ const (
 type OIDC struct {
 	oAuth2Config      *oauth2.Config
 	oidcTokenVerifier *oidc.IDTokenVerifier
+	// allowedGroups is the list of groups a user must be a member of to
+	// log in. An empty list allows every user the provider authenticates.
+	allowedGroups []string
+	// groupsClaim is the name of the ID token claim that carries the group
+	// membership of the user.
+	groupsClaim string
 }
 
 type OIDCConfig struct {
 	OAuth2Config      *oauth2.Config
 	OIDCTokenVerifier *oidc.IDTokenVerifier
+	// AllowedGroups is the list of groups a user must be a member of to log
+	// in to the gateway. An empty list allows every authenticated user.
+	AllowedGroups []string
+	// GroupsClaim is the name of the ID token claim that carries the group
+	// membership of the user. It defaults to "groups".
+	GroupsClaim string
 }
 
 func (c *OIDCConfig) New() *OIDC {
+	groupsClaim := c.GroupsClaim
+	if groupsClaim == "" {
+		groupsClaim = "groups"
+	}
+
 	return &OIDC{
 		oAuth2Config:      c.OAuth2Config,
 		oidcTokenVerifier: c.OIDCTokenVerifier,
+		allowedGroups:     c.AllowedGroups,
+		groupsClaim:       groupsClaim,
 	}
 }
 
@@ -131,18 +150,54 @@ func (h *OIDC) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	userName := findUsernameInClaims(data)
 	if userName == "" {
 		http.Error(w, "no oidc claim for username found", http.StatusInternalServerError)
+		return
+	}
+
+	// The group membership of the user is taken from the ID token. It is
+	// used by the access policy and by the group allow-list below.
+	groups := findGroupsInClaims(data, h.groupsClaim)
+
+	if !h.groupAllowed(groups) {
+		log.Printf("OIDC HandleCallback: user %s is not a member of an allowed group", userName)
+		http.Error(w, "user is not a member of an allowed group", http.StatusForbidden)
+		return
 	}
 
 	id.SetUserName(userName)
 	id.SetAuthenticated(true)
 	id.SetAuthTime(time.Now())
+	id.SetGroups(groups)
 	id.SetAttribute(identity.AttrAccessToken, oauth2Token.AccessToken)
 
 	if err := SaveSessionIdentity(r, w, id); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	http.Redirect(w, r, url, http.StatusFound)
+}
+
+// groupAllowed reports whether the user is a member of one of the groups
+// that are allowed to log in. When no groups are configured every user the
+// provider authenticated is allowed.
+func (h *OIDC) groupAllowed(groups []string) bool {
+	if len(h.allowedGroups) == 0 {
+		return true
+	}
+
+	for _, allowed := range h.allowedGroups {
+		allowed = strings.TrimSpace(allowed)
+		if allowed == "" {
+			continue
+		}
+		for _, group := range groups {
+			if strings.EqualFold(allowed, strings.TrimSpace(group)) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func findUsernameInClaims(data map[string]interface{}) string {
@@ -155,6 +210,37 @@ func findUsernameInClaims(data map[string]interface{}) string {
 	}
 
 	return ""
+}
+
+// findGroupsInClaims returns the groups the user is a member of. The claim
+// can hold a single group as a string or a list of groups. Claim names that
+// are not present yield no groups.
+func findGroupsInClaims(data map[string]interface{}, claim string) []string {
+	if claim == "" {
+		claim = "groups"
+	}
+
+	raw, found := data[claim]
+	if !found {
+		return nil
+	}
+
+	switch value := raw.(type) {
+	case string:
+		return []string{value}
+	case []string:
+		return value
+	case []interface{}:
+		groups := make([]string, 0, len(value))
+		for _, item := range value {
+			if group, ok := item.(string); ok {
+				groups = append(groups, group)
+			}
+		}
+		return groups
+	}
+
+	return nil
 }
 
 func (h *OIDC) Authenticated(next http.Handler) http.Handler {

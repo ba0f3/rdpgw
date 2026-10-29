@@ -75,6 +75,7 @@ type Configuration struct {
 	Kerberos KerberosConfig `koanf:"kerberos"`
 	Header   HeaderConfig   `koanf:"header"`
 	Caps     RDGCapsConfig  `koanf:"caps"`
+	Access   AccessConfig   `koanf:"access"`
 	Security SecurityConfig `koanf:"security"`
 	Client   ClientConfig   `koanf:"client"`
 }
@@ -110,6 +111,12 @@ type ServerConfig struct {
 	// Empty (the default) makes the gateway ignore X-Forwarded-For
 	// entirely and use r.RemoteAddr.
 	TrustedProxies []string `koanf:"trustedproxies"`
+	// SessionLifetime is the lifetime of the browser session in seconds.
+	// It is the time the user has to download an .rdp file before the
+	// session expires. Note that this is not the lifetime of the gateway
+	// credentials in the .rdp file, that is controlled by
+	// security.paatokenlifetime.
+	SessionLifetime int `koanf:"sessionlifetime"`
 }
 
 type KerberosConfig struct {
@@ -121,18 +128,37 @@ type OpenIDConfig struct {
 	ProviderUrl  string `koanf:"providerurl"`
 	ClientId     string `koanf:"clientid"`
 	ClientSecret string `koanf:"clientsecret"`
+	// Groups is the list of groups a user must be a member of to be
+	// allowed to log in to the gateway. An empty list (the default) allows
+	// every user the OpenID Connect provider authenticates.
+	Groups []string `koanf:"groups"`
+	// GroupsClaim is the name of the ID token claim that carries the group
+	// membership of the user. It defaults to "groups".
+	GroupsClaim string `koanf:"groupsclaim"`
+	// Scopes are the scopes requested from the OpenID Connect provider.
+	// It defaults to "openid profile email". Providers that only expose
+	// group membership through a scope (Keycloak for example) need that
+	// scope to be added here.
+	Scopes []string `koanf:"scopes"`
 }
 
 type HeaderConfig struct {
-	UserHeader      string `koanf:"userheader"`
-	UserIdHeader    string `koanf:"useridheader"`
-	EmailHeader     string `koanf:"emailheader"`
+	UserHeader        string `koanf:"userheader"`
+	UserIdHeader      string `koanf:"useridheader"`
+	EmailHeader       string `koanf:"emailheader"`
 	DisplayNameHeader string `koanf:"displaynameheader"`
+	// GroupsHeader is the header that carries the group membership of the
+	// user. The value is a comma separated list of group names. It is used
+	// by the access policy to apply per group restrictions.
+	GroupsHeader string `koanf:"groupsheader"`
 	// TrustedProxies is the CIDR allow-list of upstream proxies allowed to
 	// stamp UserHeader (and friends). Empty disables header auth at runtime.
-	TrustedProxies  []string `koanf:"trustedproxies"`
+	TrustedProxies []string `koanf:"trustedproxies"`
 }
 
+// RDGCapsConfig is the global capability configuration. The redirect
+// settings are the ceiling of the access policy: a rule in the access
+// section can only narrow them, never widen them.
 type RDGCapsConfig struct {
 	SmartCardAuth   bool `koanf:"smartcardauth"`
 	TokenAuth       bool `koanf:"tokenauth"`
@@ -144,6 +170,55 @@ type RDGCapsConfig struct {
 	EnablePort      bool `koanf:"enableport"`
 	EnablePnp       bool `koanf:"enablepnp"`
 	EnableDrive     bool `koanf:"enabledrive"`
+	// EnableSmartCard allows the smartcards of the client to be redirected
+	// into the session. It is off by default.
+	EnableSmartCard bool `koanf:"enablesmartcard"`
+	// EnableWebAuthn allows WebAuthn credential prompts to be redirected to
+	// the client. It is off by default.
+	EnableWebAuthn bool `koanf:"enablewebauthn"`
+	// EnableLocation allows the location information of the client to be
+	// redirected into the session. It is off by default.
+	EnableLocation bool `koanf:"enablelocation"`
+}
+
+// AccessConfig holds the per user and per group access rules.
+type AccessConfig struct {
+	// Rules are evaluated in order, the first rule that matches the user
+	// applies. A rule can narrow the redirect policy and restrict the
+	// hosts the user may connect to.
+	Rules []AccessRule `koanf:"rules"`
+}
+
+// AccessRule restricts what a set of users or groups may do.
+type AccessRule struct {
+	// Name is an optional identifier for the rule, it is used in the log
+	// messages of the gateway.
+	Name string `koanf:"name"`
+	// Users lists the user names the rule applies to.
+	Users []string `koanf:"users"`
+	// Groups lists the group names the rule applies to.
+	Groups []string `koanf:"groups"`
+	// Redirect narrows the redirect policy of the global capabilities for
+	// the matching users. Settings that are not mentioned are inherited.
+	Redirect *AccessRedirect `koanf:"redirect"`
+	// Hosts restricts the matching users to the listed hosts. An empty list
+	// does not restrict the hosts. The single entry "*" allows any host.
+	Hosts []string `koanf:"hosts"`
+	// Deny refuses the matching users access to the gateway.
+	Deny bool `koanf:"deny"`
+}
+
+// AccessRedirect is a sparse redirect policy. A setting that is not present
+// is inherited from the global capabilities.
+type AccessRedirect struct {
+	EnableClipboard *bool `koanf:"enableclipboard"`
+	EnableDrive     *bool `koanf:"enabledrive"`
+	EnablePrinter   *bool `koanf:"enableprinter"`
+	EnablePort      *bool `koanf:"enableport"`
+	EnablePnp       *bool `koanf:"enablepnp"`
+	EnableSmartCard *bool `koanf:"enablesmartcard"`
+	EnableWebAuthn  *bool `koanf:"enablewebauthn"`
+	EnableLocation  *bool `koanf:"enablelocation"`
 }
 
 type SecurityConfig struct {
@@ -155,6 +230,16 @@ type SecurityConfig struct {
 	QueryTokenIssuer       string `koanf:"querytokenissuer"`
 	VerifyClientIp         bool   `koanf:"verifyclientip"`
 	EnableUserToken        bool   `koanf:"enableusertoken"`
+	// PAATokenLifetime is the lifetime of the gateway credentials in
+	// minutes. These are the credentials that are handed to the client in
+	// the .rdp file, they determine how long a downloaded .rdp file stays
+	// usable.
+	PAATokenLifetime int `koanf:"paatokenlifetime"`
+	// UserTokenLifetime is the lifetime of the user token in minutes.
+	UserTokenLifetime int `koanf:"usertokenlifetime"`
+	// QueryTokenLifetime is the lifetime of the host selection query token
+	// in minutes.
+	QueryTokenLifetime int `koanf:"querytokenlifetime"`
 }
 
 type ClientConfig struct {
@@ -211,21 +296,29 @@ var Conf Configuration
 
 func Load(configFile string) Configuration {
 
+	// start from a clean configuration, a reload must not keep the values
+	// of a previous load.
+	Conf = Configuration{}
+
 	var k = koanf.New(".")
 
 	k.Load(confmap.Provider(map[string]interface{}{
-		"Server.Tls":                 "auto",
-		"Server.Port":                443,
-		"Server.BindAddress":         "",
-		"Server.SessionStore":        "cookie",
-		"Server.HostSelection":       "roundrobin",
-		"Server.Authentication":      "openid",
-		"Server.AuthSocket":          "/tmp/rdpgw-auth.sock",
-		"Server.BasicAuthTimeout":    5,
-		"Client.NetworkAutoDetect":   1,
-		"Client.BandwidthAutoDetect": 1,
-		"Security.VerifyClientIp":    true,
-		"Caps.TokenAuth":             true,
+		"Server.Tls":                  "auto",
+		"Server.Port":                 443,
+		"Server.BindAddress":          "",
+		"Server.SessionStore":         "cookie",
+		"Server.SessionLifetime":      120,
+		"Server.HostSelection":        "roundrobin",
+		"Server.Authentication":       "openid",
+		"Server.AuthSocket":           "/tmp/rdpgw-auth.sock",
+		"Server.BasicAuthTimeout":     5,
+		"Client.NetworkAutoDetect":    1,
+		"Client.BandwidthAutoDetect":  1,
+		"Security.VerifyClientIp":     true,
+		"Security.PAATokenLifetime":   5,
+		"Security.UserTokenLifetime":  5,
+		"Security.QueryTokenLifetime": 5,
+		"Caps.TokenAuth":              true,
 	}, "."), nil)
 
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
@@ -257,6 +350,7 @@ func Load(configFile string) Configuration {
 	k.UnmarshalWithConf("OpenId", &Conf.OpenId, koanfTag)
 	k.UnmarshalWithConf("Header", &Conf.Header, koanfTag)
 	k.UnmarshalWithConf("Caps", &Conf.Caps, koanfTag)
+	k.UnmarshalWithConf("Access", &Conf.Access, koanfTag)
 	k.UnmarshalWithConf("Security", &Conf.Security, koanfTag)
 	k.UnmarshalWithConf("Client", &Conf.Client, koanfTag)
 	k.UnmarshalWithConf("Kerberos", &Conf.Kerberos, koanfTag)
@@ -314,6 +408,34 @@ func Load(configFile string) Configuration {
 
 	if Conf.Server.HeaderEnabled() && Conf.Header.UserHeader == "" {
 		log.Fatalf("header authentication is configured but no user header was specified")
+	}
+
+	if Conf.Server.SessionLifetime < 0 {
+		log.Fatalf("server.sessionlifetime cannot be negative")
+	}
+
+	if Conf.Security.PAATokenLifetime < 0 {
+		log.Fatalf("security.paatokenlifetime cannot be negative")
+	}
+
+	if Conf.Security.UserTokenLifetime < 0 {
+		log.Fatalf("security.usertokenlifetime cannot be negative")
+	}
+
+	if Conf.Security.QueryTokenLifetime < 0 {
+		log.Fatalf("security.querytokenlifetime cannot be negative")
+	}
+
+	if Conf.OpenId.GroupsClaim == "" {
+		Conf.OpenId.GroupsClaim = "groups"
+	}
+
+	// every access rule must select at least one user or group, a rule
+	// without a selector would match every user.
+	for i, rule := range Conf.Access.Rules {
+		if len(rule.Users) == 0 && len(rule.Groups) == 0 {
+			log.Fatalf("access rule %d (%s) does not select any user or group", i, rule.Name)
+		}
 	}
 
 	// prepend '//' if required for URL parsing
