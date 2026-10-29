@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/maphash"
 	"html/template"
 	"log"
 	rnd "math/rand"
@@ -457,7 +457,13 @@ func (h *Handler) selectRandomHost(id identity.Identity) string {
 		return ""
 	}
 
-	r := rnd.New(rnd.NewSource(int64(new(maphash.Hash).Sum64())))
+	seed := make([]byte, 8)
+	if _, err := rand.Read(seed); err != nil {
+		log.Printf("Cannot generate random seed due to %s", err)
+		return allowed[0]
+	}
+
+	r := rnd.New(rnd.NewSource(int64(binary.LittleEndian.Uint64(seed))))
 	host := allowed[r.Intn(len(allowed))]
 	return host
 }
@@ -477,7 +483,9 @@ func (h *Handler) getHost(ctx context.Context, u *url.URL) (string, error) {
 
 	id := identity.FromCtx(ctx)
 	if id == nil {
-		return host, nil
+		// without an identity the access policy cannot be applied, the
+		// connection is refused.
+		return "", errors.New("no identity found in context")
 	}
 
 	host = strings.Replace(host, "{{ preferred_username }}", id.UserName(), 1)
@@ -589,6 +597,12 @@ func (h *Handler) HandleDownload(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, errors.New("invalid server configuration").Error(), http.StatusInternalServerError)
 			return
 		}
+	}
+
+	if h.paaTokenGenerator == nil {
+		log.Printf("Cannot generate a gateway access token for user %s: token authentication is disabled", id.UserName())
+		http.Error(w, errors.New("token authentication is disabled").Error(), http.StatusNotImplemented)
+		return
 	}
 
 	token, err := h.paaTokenGenerator(ctx, user, host)

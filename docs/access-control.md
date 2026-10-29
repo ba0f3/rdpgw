@@ -39,6 +39,13 @@ The `caps` section of the configuration holds the global policy. It is the
 narrow it, they can never widen it. A rule that enables a resource the
 global policy denies has no effect.
 
+The ceiling holds for the whole life of a session. The policy that is
+signed into the gateway access token is narrowed by the policy that is
+configured when the client connects: a token that was issued under a looser
+policy does not widen the policy of the gateway. A token that carries no
+policy at all is refused, the gateway does not guess what the user was
+allowed to do.
+
 ```yaml
 Caps:
   # the global policy, the ceiling of the deployment
@@ -64,10 +71,12 @@ Caps:
 | `EnableLocation` | the location information of the client | no, client side only |
 
 The resources without a wire enforcement are controlled by the settings of
-the `.rdp` file only. The signature of the `.rdp` file does not cover
+the `.rdp` file only. The RDP gateway protocol has no flag for them, the
+gateway cannot refuse them. The signature of the `.rdp` file does not cover
 `redirectlocation`, `redirectwebauthn`, `camerastoredirect` and
-`usbdevicestoredirect`, so those settings have to be treated as advisory
-when the file travels through an untrusted channel.
+`usbdevicestoredirect` either, so those settings have to be treated as
+advisory when the file travels through an untrusted channel. Sign the file
+with `client.signingcert` and `client.signingkey` to protect the rest.
 
 `caps.disableredirect` disables every redirection at once, `caps.redirectall`
 enables every redirection at once. They are mutually exclusive, the disable
@@ -129,9 +138,11 @@ The ACL is applied on top of the host selection mode of the gateway
 (`roundrobin`, `signed`, `unsigned` or `any`). It never widens what the host
 selection mode allows, it only narrows it.
 
-The host in the `hosts` list of a rule is compared case insensitively and
-the port is ignored when one of the two entries carries one, so `10.0.0.1`
-matches a connection to `10.0.0.1:3389`.
+The host in the `hosts` list of a rule is compared case insensitively. The
+port of the requested host is ignored when the rule does not carry one, so
+`10.0.0.1` matches a connection to `10.0.0.1:3389`. A rule that carries a
+port pins the endpoint, `10.0.0.1:3389` does not match a connection to
+`10.0.0.1:3390`.
 
 ## The group allow-list
 
@@ -167,7 +178,16 @@ that your provider uses for the group membership, for Keycloak that is
 the claim, for Keycloak that is a client scope with a groups mapper.
 
 The group membership that the gateway reads from the ID token is also the
-group membership that the rules of the `access` section match on.
+group membership that the rules of the `access` section match on. The
+membership is a snapshot that is taken at the login: a user that loses the
+group keeps the access of the session until it expires, keep
+`server.sessionlifetime` short when that matters.
+
+The group membership is signed into the gateway access token, so the rules
+that select users by their group apply to the session of the `.rdp` file as
+well. The authentication methods that cannot deliver a group membership
+(Kerberos, NTLM and the local authentication) can only be matched by the
+`users` of a rule.
 
 With header authentication the groups are taken from a header:
 

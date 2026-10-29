@@ -52,6 +52,34 @@ type Policy struct {
 	EnableAll bool `json:"enableAll,omitempty"`
 }
 
+// Narrow returns the policy that allows only the resources that both this
+// policy and the other one allow. It is used to keep the policy of the
+// gateway the ceiling of the policy that is signed into a gateway access
+// token: a token that was issued under a looser policy does not widen the
+// policy of the gateway.
+func (p Policy) Narrow(other Policy) Policy {
+	if p.DisableAll || other.DisableAll {
+		return Policy{DisableAll: true}
+	}
+
+	narrowed := Policy{
+		Clipboard: p.Clipboard && other.Clipboard,
+		Drive:     p.Drive && other.Drive,
+		Printer:   p.Printer && other.Printer,
+		Port:      p.Port && other.Port,
+		Pnp:       p.Pnp && other.Pnp,
+		SmartCard: p.SmartCard && other.SmartCard,
+		WebAuthn:  p.WebAuthn && other.WebAuthn,
+		Location:  p.Location && other.Location,
+	}
+
+	if p.EnableAll && other.EnableAll {
+		narrowed.EnableAll = true
+	}
+
+	return narrowed
+}
+
 // Overrides is a sparse policy. A nil field means "inherit the default
 // policy", a non nil field narrows it.
 type Overrides struct {
@@ -275,20 +303,40 @@ func expandHost(host string, user string) string {
 }
 
 // hostMatches compares two host entries. The comparison is case
-// insensitive and ignores the port when one of the two entries carries one,
-// so that "10.0.0.1" matches a connection to "10.0.0.1:3389".
+// insensitive. The port of the requested host is ignored when the allowed
+// entry does not carry one, so that "10.0.0.1" matches a connection to
+// "10.0.0.1:3389". An allowed entry that carries a port pins the endpoint.
 func hostMatches(allowed string, host string) bool {
 	if strings.EqualFold(allowed, host) {
 		return true
 	}
 
-	allowedHost, _, allowedErr := net.SplitHostPort(allowed)
-	hostHost, _, hostErr := net.SplitHostPort(host)
-	if allowedErr != nil || hostErr != nil {
-		return false
+	allowedHost, allowedPort, allowedErr := net.SplitHostPort(allowed)
+	hostHost, hostPort, hostErr := net.SplitHostPort(host)
+
+	switch {
+	case allowedErr == nil && hostErr == nil:
+		// both carry a port, the endpoint has to match
+		return strings.EqualFold(allowedHost, hostHost) && allowedPort == hostPort
+	case allowedErr != nil && hostErr == nil:
+		// only the requested host carries a port, it is ignored
+		return strings.EqualFold(allowed, hostHost)
 	}
 
-	return strings.EqualFold(allowedHost, hostHost)
+	return false
+}
+
+// HasGroupRules reports whether the engine holds rules that select users by
+// their group membership. Such rules only apply to the users whose group
+// membership is known to the gateway.
+func (e *Engine) HasGroupRules() bool {
+	for i := range e.rules {
+		if len(e.rules[i].Groups) > 0 {
+			return true
+		}
+	}
+
+	return false
 }
 
 var (

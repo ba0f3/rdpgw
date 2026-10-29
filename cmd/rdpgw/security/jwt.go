@@ -49,6 +49,14 @@ var VerifyClientIP bool = true
 type customClaims struct {
 	RemoteServer string `json:"remoteServer"`
 	ClientIP     string `json:"clientIp"`
+	// User is the name of the user the token was issued for. It is the
+	// complete name, the subject of the token can be the name without the
+	// domain.
+	User string `json:"user,omitempty"`
+	// Groups is the group membership of the user. The access policy
+	// matches on it, it restores the membership that was resolved when
+	// the .rdp file was handed out.
+	Groups []string `json:"groups,omitempty"`
 	// Redirect is the redirect policy that applies to the session. It is
 	// signed into the token so that the gateway enforces the policy that
 	// was applied when the .rdp file was handed out.
@@ -126,15 +134,31 @@ func CheckPAACookie(ctx context.Context, tokenString string) (bool, error) {
 
 	tunnel.TargetServer = custom.RemoteServer
 	tunnel.RemoteAddr = custom.ClientIP
-	tunnel.User.SetUserName(standard.Subject)
+
+	// The identity of the session is restored from the token. The complete
+	// user name and the group membership are needed to apply the access
+	// policy of the gateway to the session.
+	userName := custom.User
+	if userName == "" {
+		userName = standard.Subject
+	}
+	tunnel.User.SetUserName(userName)
+	tunnel.User.SetGroups(custom.Groups)
 
 	// The redirect policy of the session is signed into the token. It is
 	// the policy that was resolved for the user when the .rdp file was
-	// handed out, so the client cannot widen it.
+	// handed out, so the client cannot widen it. The policy of the gateway
+	// is the ceiling: a token that was issued under a looser policy does
+	// not widen the policy that is configured now.
+	policy := access.Policy{DisableAll: true}
 	if custom.Redirect != nil {
-		flags := protocol.RedirectFlagsFromPolicy(*custom.Redirect)
-		tunnel.RedirectFlags = &flags
+		policy = *custom.Redirect
 	}
+
+	policy = policy.Narrow(access.Current().PolicyFor(tunnel.User))
+
+	flags := protocol.RedirectFlagsFromPolicy(policy)
+	tunnel.RedirectFlags = &flags
 
 	return true, nil
 }
@@ -175,6 +199,11 @@ func GeneratePAAToken(ctx context.Context, username string, server string) (stri
 		RemoteServer: server,
 		ClientIP:     clientIP,
 		Redirect:     &policy,
+	}
+
+	if id != nil {
+		private.User = id.UserName()
+		private.Groups = id.Groups()
 	}
 
 	if token, err := jwt.Signed(sig).Claims(standard).Claims(private).Serialize(); err != nil {

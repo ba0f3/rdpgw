@@ -270,6 +270,86 @@ func TestDenyRule(t *testing.T) {
 	}
 }
 
+func TestPolicyNarrow(t *testing.T) {
+	cases := []struct {
+		name     string
+		policy   Policy
+		other    Policy
+		expected Policy
+	}{
+		{
+			name:     "the intersection of two policies",
+			policy:   Policy{Clipboard: true, Drive: true},
+			other:    Policy{Clipboard: true},
+			expected: Policy{Clipboard: true},
+		},
+		{
+			name:     "disable all wins",
+			policy:   Policy{Clipboard: true},
+			other:    Policy{DisableAll: true},
+			expected: Policy{DisableAll: true},
+		},
+		{
+			name:     "enable all and a per resource policy",
+			policy:   Policy{EnableAll: true, Clipboard: true, Drive: true},
+			other:    Policy{Clipboard: true},
+			expected: Policy{Clipboard: true},
+		},
+		{
+			name:     "enable all twice",
+			policy:   Policy{EnableAll: true, Clipboard: true, Drive: true},
+			other:    Policy{EnableAll: true, Clipboard: true, Drive: true},
+			expected: Policy{EnableAll: true, Clipboard: true, Drive: true},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.policy.Narrow(tc.other)
+			if got != tc.expected {
+				t.Errorf("Narrow() = %+v, want %+v", got, tc.expected)
+			}
+		})
+	}
+}
+
+// The port of the requested host is ignored when the allowed entry does not
+// carry one.
+func TestHostMatchesWithoutPort(t *testing.T) {
+	cases := []struct {
+		allowed string
+		host    string
+		want    bool
+	}{
+		{allowed: "10.0.0.1", host: "10.0.0.1:3389", want: true},
+		{allowed: "10.0.0.1", host: "10.0.0.1", want: true},
+		{allowed: "10.0.0.1:3389", host: "10.0.0.1:3389", want: true},
+		{allowed: "10.0.0.1:3389", host: "10.0.0.1:3390", want: false},
+		{allowed: "10.0.0.1", host: "10.0.0.2:3389", want: false},
+		{allowed: "10.0.0.1", host: "10.0.0.2", want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.allowed+" "+tc.host, func(t *testing.T) {
+			if got := hostMatches(tc.allowed, tc.host); got != tc.want {
+				t.Errorf("hostMatches(%q, %q) = %v, want %v", tc.allowed, tc.host, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHasGroupRules(t *testing.T) {
+	engine := NewEngine(Policy{}, nil)
+	if engine.HasGroupRules() {
+		t.Errorf("an engine without rules has no group rules")
+	}
+
+	engine = NewEngine(Policy{}, []Rule{{Groups: []string{"staff"}}})
+	if !engine.HasGroupRules() {
+		t.Errorf("an engine with a group rule has group rules")
+	}
+}
+
 func TestRuleForWithoutIdentity(t *testing.T) {
 	engine := NewEngine(
 		Policy{},

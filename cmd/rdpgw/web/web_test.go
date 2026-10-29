@@ -42,8 +42,18 @@ func contains(needle string, haystack []string) bool {
 	return false
 }
 
+// testContext returns a context with an authenticated identity, the access
+// policy of the gateway is applied to the identity.
+func testContext() context.Context {
+	id := identity.NewUser()
+	id.SetUserName(testuser)
+	id.SetAuthenticated(true)
+
+	return identity.AddToRequestCtx(id, &http.Request{}).Context()
+}
+
 func TestGetHost(t *testing.T) {
-	ctx := context.Background()
+	ctx := testContext()
 	c := Config{
 		HostSelection: "roundrobin",
 		Hosts:         hosts,
@@ -155,7 +165,7 @@ func TestGetHostAnyRejectsSensitiveDestinations(t *testing.T) {
 			vals.Set("host", tc.host)
 			u.RawQuery = vals.Encode()
 
-			got, err := h.getHost(context.Background(), u)
+			got, err := h.getHost(testContext(), u)
 			if err == nil {
 				t.Errorf("getHost(%q) returned %q with no error; sensitive destinations must be refused in 'any' mode", tc.host, got)
 			}
@@ -181,7 +191,7 @@ func TestGetHostAnyAllowsExplicitOptIn(t *testing.T) {
 		vals.Set("host", target)
 		u.RawQuery = vals.Encode()
 
-		got, err := h.getHost(context.Background(), u)
+		got, err := h.getHost(testContext(), u)
 		if err != nil {
 			t.Errorf("getHost(%q) rejected with %v; explicit opt-in must allow private and extra-port destinations", target, err)
 		}

@@ -67,6 +67,18 @@ const (
 	AuthenticationBasic    = "local"
 	AuthenticationKerberos = "kerberos"
 	AuthenticationHeader   = "header"
+
+	// defaultTokenLifetime is the lifetime of the credentials the gateway
+	// hands out in minutes, the defaultSessionLifetime is the lifetime of
+	// the browser session in seconds.
+	defaultTokenLifetime   = 5
+	defaultSessionLifetime = 120
+
+	// maxTokenLifetime and maxSessionLifetime are the values above which
+	// the gateway warns the operator. They are not limits, an operator
+	// that needs a longer lifetime gets one.
+	maxTokenLifetime   = 24 * 60
+	maxSessionLifetime = 60 * 60
 )
 
 type Configuration struct {
@@ -424,6 +436,37 @@ func Load(configFile string) Configuration {
 
 	if Conf.Security.QueryTokenLifetime < 0 {
 		log.Fatalf("security.querytokenlifetime cannot be negative")
+	}
+
+	// A lifetime of zero is the same as an unset lifetime, the default
+	// applies. A token that expires on arrival is never what an operator
+	// wants.
+	if Conf.Server.SessionLifetime == 0 {
+		Conf.Server.SessionLifetime = defaultSessionLifetime
+	}
+
+	if Conf.Security.PAATokenLifetime == 0 {
+		Conf.Security.PAATokenLifetime = defaultTokenLifetime
+	}
+
+	if Conf.Security.UserTokenLifetime == 0 {
+		Conf.Security.UserTokenLifetime = defaultTokenLifetime
+	}
+
+	if Conf.Security.QueryTokenLifetime == 0 {
+		Conf.Security.QueryTokenLifetime = defaultTokenLifetime
+	}
+
+	// The lifetime of the gateway credentials widens the window in which a
+	// stolen .rdp file can be used, the operator should know about it.
+	if Conf.Security.PAATokenLifetime > maxTokenLifetime {
+		log.Printf("WARNING: security.paatokenlifetime is %d minutes, a gateway access token stays usable for that long",
+			Conf.Security.PAATokenLifetime)
+	}
+
+	if Conf.Server.SessionLifetime > maxSessionLifetime {
+		log.Printf("WARNING: server.sessionlifetime is %d seconds, the group membership of a user stays valid for that long",
+			Conf.Server.SessionLifetime)
 	}
 
 	if Conf.OpenId.GroupsClaim == "" {

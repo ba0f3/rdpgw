@@ -22,8 +22,16 @@ default of the client. Three things changed:
   they have no effect anymore.
 
 The smartcard, WebAuthn and location redirection are part of the policy now
-and are denied by default. Set `Caps.EnableSmartCard`,
+and are denied by default. The RDP gateway protocol has no flag for them,
+they are enforced by the `.rdp` file only. Set `Caps.EnableSmartCard`,
 `Caps.EnableWebAuthn` or `Caps.EnableLocation` to `true` to allow them.
+
+Because those three settings live in the `.rdp` file only, they are advisory
+when the file travels through an untrusted channel. Configure
+`Client.SigningCert` and `Client.SigningKey` to sign the file if that
+matters for your deployment. The signature does not cover
+`redirectlocation`, `redirectwebauthn`, `camerastoredirect` and
+`usbdevicestoredirect`, keep those in mind.
 
 ### The lifetime of the credentials is configurable
 
