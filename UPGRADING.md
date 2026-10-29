@@ -150,6 +150,25 @@ If no proxy fronts rdpgw, leave `TrustedProxies` empty -- the
 request's `RemoteAddr` is the right source for client identity in
 that case.
 
+The chain of `X-Forwarded-For` is now evaluated from the right: the
+client address is the right most address of the chain that is not a
+trusted proxy itself. The addresses on the right are the ones the
+trusted proxies appended and are more trustworthy than the ones a
+client could have supplied itself. Taking the first address of the
+chain let a client pick the address the gateway binds the credentials
+of a session to, which made a stolen `.rdp` file usable from another
+network.
+
+Proxies that forward the header should therefore set it to the address
+they see instead of appending to a value the client supplied:
+
+```nginx
+proxy_set_header X-Forwarded-For $remote_addr;
+```
+
+A proxy that appends (`$proxy_add_x_forwarded_for`) still works, the
+address the proxy appended is the one the gateway uses.
+
 ### `hostselection: any` now refuses non-routable destinations and non-RDP ports by default
 
 Previously, when `server.hostselection: any` was set, rdpgw forwarded

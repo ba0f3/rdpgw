@@ -214,7 +214,10 @@ server {
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # Set the address of the client, do not append to a header the
+        # client could have supplied itself. The gateway binds the
+        # credentials of a session to the address of the client.
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
 
         # Timeouts for long-lived connections

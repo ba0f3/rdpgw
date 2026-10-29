@@ -30,13 +30,22 @@ func InitTrustedProxies(cidrs []string) {
 	trustedProxyNets = nets
 }
 
+// remoteIsTrustedProxy reports whether the request arrived from one of the
+// trusted proxies.
 func remoteIsTrustedProxy(remoteAddr string) bool {
-	if len(trustedProxyNets) == 0 {
-		return false
-	}
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
 		host = remoteAddr
+	}
+
+	return ipIsTrustedProxy(host)
+}
+
+// ipIsTrustedProxy reports whether the address is in the allow-list of the
+// trusted proxies.
+func ipIsTrustedProxy(host string) bool {
+	if len(trustedProxyNets) == 0 {
+		return false
 	}
 	ip := net.ParseIP(host)
 	if ip == nil {
@@ -84,9 +93,25 @@ func EnrichContext(next http.Handler) http.Handler {
 				for i := range ips {
 					ips[i] = strings.TrimSpace(ips[i])
 				}
-				clientIp = ips[0]
-				if len(ips) > 1 {
-					proxies = ips[1:]
+
+				// The chain is ordered from the client to the proxies:
+				// the addresses on the right are the ones the trusted
+				// proxies appended and are more trustworthy than the ones
+				// a client could have supplied itself. The client address
+				// is therefore the right most address that is not a
+				// trusted proxy. Taking the first one would let a client
+				// spoof the address the gateway binds the credentials of
+				// the session to.
+				for i := len(ips) - 1; i >= 0; i-- {
+					if ips[i] == "" {
+						continue
+					}
+					if ipIsTrustedProxy(ips[i]) {
+						continue
+					}
+					clientIp = ips[i]
+					proxies = ips[i+1:]
+					break
 				}
 			}
 		}

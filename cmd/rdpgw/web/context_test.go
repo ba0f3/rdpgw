@@ -50,6 +50,28 @@ func TestEnrichContextXForwardedForRequiresTrustedProxy(t *testing.T) {
 			wantClientIp:   "203.0.113.42",
 		},
 		{
+			// The client supplied the first entry itself, the trusted
+			// proxy appended the address it saw. The address of the
+			// client is the one the proxy appended, taking the first
+			// entry would let the client pick the address the gateway
+			// binds the credentials of the session to.
+			name:           "spoofed prefix does not win over the appended address",
+			trustedProxies: []string{"10.0.0.0/8"},
+			remoteAddr:     "10.1.2.3:5678",
+			xff:            "198.51.100.9, 203.0.113.42",
+			wantClientIp:   "203.0.113.42",
+		},
+		{
+			// The client spoofed the address of another client and put
+			// the address of the proxy behind it, the address of the
+			// client is the one the proxy appended.
+			name:           "spoofed client address does not win",
+			trustedProxies: []string{"10.0.0.0/8"},
+			remoteAddr:     "10.1.2.3:5678",
+			xff:            "203.0.113.42, 198.51.100.9",
+			wantClientIp:   "198.51.100.9",
+		},
+		{
 			name:           "trusted remote without XFF uses RemoteAddr",
 			trustedProxies: []string{"10.0.0.0/8"},
 			remoteAddr:     "10.1.2.3:5678",

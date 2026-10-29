@@ -47,6 +47,13 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `Client.RdpOverridableKeys`. See [UPGRADING.md](UPGRADING.md).
 - The `.rdp` file now always carries the redirect settings of the policy,
   even when they carry the value the client uses by default.
+- `X-Forwarded-For` is now evaluated from the right: the client address is
+  the right most address of the chain that is not a trusted proxy. Taking
+  the first address of the chain let a client supply the address the
+  gateway binds the credentials of a session to, which made a stolen
+  `.rdp` file usable from another network behind a proxy. Proxies that
+  forward the header should set it to the address they see
+  (`proxy_set_header X-Forwarded-For $remote_addr;` in nginx).
 
 ### Added
 

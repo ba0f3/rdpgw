@@ -464,6 +464,16 @@ func Load(configFile string) Configuration {
 			Conf.Security.PAATokenLifetime)
 	}
 
+	if Conf.Security.UserTokenLifetime > maxTokenLifetime {
+		log.Printf("WARNING: security.usertokenlifetime is %d minutes, a user token stays usable for that long",
+			Conf.Security.UserTokenLifetime)
+	}
+
+	if Conf.Security.QueryTokenLifetime > maxTokenLifetime {
+		log.Printf("WARNING: security.querytokenlifetime is %d minutes, a query token stays usable for that long",
+			Conf.Security.QueryTokenLifetime)
+	}
+
 	if Conf.Server.SessionLifetime > maxSessionLifetime {
 		log.Printf("WARNING: server.sessionlifetime is %d seconds, the group membership of a user stays valid for that long",
 			Conf.Server.SessionLifetime)
