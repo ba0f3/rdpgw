@@ -54,7 +54,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   rules that narrow the redirect policy of the gateway and restrict the
   remote hosts a user may connect to. The rules are evaluated in order, the
   first rule that matches the user applies. The global policy in `Caps` is
-  the ceiling of the deployment, a rule can only narrow it. See
+  the ceiling of the deployment, a rule can only narrow it. A rule with
+  `deny: true` keeps the matching users out completely. See
   [docs/access-control.md](docs/access-control.md).
 - `OpenId.Groups` (`[]string`) restricts the login to the members of the
   listed groups. A user that is not a member of one of them is refused with
