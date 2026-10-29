@@ -471,6 +471,10 @@ func (h *Handler) getHost(ctx context.Context, u *url.URL) (string, error) {
 		return "", err
 	}
 
+	if host == "" {
+		return "", errors.New("no host is allowed for this user")
+	}
+
 	id := identity.FromCtx(ctx)
 	if id == nil {
 		return host, nil

@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -94,6 +96,36 @@ func TestGetHostWithoutMatchingRule(t *testing.T) {
 	}
 }
 
+// A denied user cannot reach any host.
+func TestGetHostDeniedUser(t *testing.T) {
+	installPolicy(t, access.Policy{}, []access.Rule{
+		{
+			Users: []string{"blocked"},
+			Deny:  true,
+		},
+	})
+
+	c := Config{
+		HostSelection: "unsigned",
+		Hosts:         hosts,
+	}
+	h := c.NewHandler()
+
+	id := identity.NewUser()
+	id.SetUserName("blocked")
+	id.SetAuthenticated(true)
+
+	u := &url.URL{Host: "example.com"}
+	vals := u.Query()
+	vals.Set("host", "10.0.0.1:3389")
+	u.RawQuery = vals.Encode()
+
+	ctx := identity.AddToRequestCtx(id, &http.Request{}).Context()
+	if _, err := h.getHost(ctx, u); err == nil {
+		t.Errorf("getHost accepted a host for a denied user")
+	}
+}
+
 // The redirect settings of the .rdp file follow the access policy of the
 // user.
 func TestHandleDownloadAppliesRedirectPolicy(t *testing.T) {
@@ -154,6 +186,58 @@ func TestHandleDownloadAppliesRedirectPolicy(t *testing.T) {
 	// the client uses by default
 	if !strings.Contains(body, "redirectlocation:i:0"+rdp.CRLF) {
 		t.Errorf("the redirect settings are not written explicitly:\n%s", body)
+	}
+}
+
+// The .rdp template of the operator cannot widen the policy of the gateway.
+func TestHandleDownloadTemplateCannotWidenPolicy(t *testing.T) {
+	installPolicy(t, access.Policy{}, nil)
+
+	template := filepath.Join(t.TempDir(), "default.rdp")
+	content := "redirectclipboard:i:1\r\nredirectprinters:i:1\r\ndrivestoredirect:s:*\r\n"
+	if err := os.WriteFile(template, []byte(content), 0600); err != nil {
+		t.Fatalf("cannot write the template: %v", err)
+	}
+
+	req, err := http.NewRequest("GET", "/connect", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	id := identity.NewUser()
+	id.SetUserName(testuser)
+	id.SetAuthenticated(true)
+
+	req = identity.AddToRequestCtx(id, req)
+
+	u, _ := url.Parse(gateway)
+	c := Config{
+		HostSelection:     "roundrobin",
+		Hosts:             hosts,
+		PAATokenGenerator: paaTokenMock,
+		GatewayAddress:    u,
+		TemplateFile:      template,
+	}
+	h := c.NewHandler()
+
+	http.HandlerFunc(h.HandleDownload).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
+	}
+
+	body := rr.Body.String()
+	data := rdpToMap(strings.Split(body, rdp.CRLF))
+
+	if data["redirectclipboard"] != "0" {
+		t.Errorf("redirectclipboard = %q, want 0", data["redirectclipboard"])
+	}
+	if data["redirectprinters"] != "0" {
+		t.Errorf("redirectprinters = %q, want 0", data["redirectprinters"])
+	}
+	if data["drivestoredirect"] != "" {
+		t.Errorf("drivestoredirect = %q, want an empty value", data["drivestoredirect"])
 	}
 }
 
