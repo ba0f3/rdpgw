@@ -9,10 +9,13 @@ import (
 const (
 	CTXKey = "github.com/bolkedebruin/rdpgw/common/identity"
 
-	AttrRemoteAddr  = "remoteAddr"
-	AttrClientIp    = "clientIp"
-	AttrProxies     = "proxyAddresses"
-	AttrAccessToken = "accessToken" // todo remove for security reasons
+	AttrRemoteAddr           = "remoteAddr"
+	AttrClientIp             = "clientIp"
+	AttrProxies              = "proxyAddresses"
+	AttrAccessToken          = "accessToken" // todo remove for security reasons
+	AttrGroupsKnown          = "groupsKnown"
+	AttrSubject              = "oidcSubject"
+	AttrCredentialGeneration = "credentialGeneration"
 )
 
 type Identity interface {

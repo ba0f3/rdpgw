@@ -112,10 +112,11 @@ The gateway enforces an access policy for every user:
 * the **host ACL** restricts the remote hosts a user may connect to
 * the **group allow-list** restricts who may log in at all
 
-The policy is enforced by the gateway and not by the client. The resolved
-redirect policy is signed into the gateway access token and replayed in the
-tunnel authorization response, the generated `.rdp` file is rewritten to
-match it and the redirect settings can never be overridden through the URL.
+The gateway enforces host ACLs and advertises redirection settings in the
+credential, tunnel response and generated `.rdp` file. Redirection settings
+cannot be overridden through the download URL. Untrusted clients can ignore
+these settings, so clipboard and drive restrictions must also be enforced on
+the [destination session hosts](docs/redirection-enforcement.md).
 
 The `caps` section holds the global policy, it is the ceiling of the
 deployment. The rules in the `access` section can only narrow it, per user
@@ -142,12 +143,15 @@ Access:
 
 The lifetime of the gateway credentials in the `.rdp` file is configurable
 with `security.paatokenlifetime`, the lifetime of the browser session with
-`server.sessionlifetime`.
+`server.sessionlifetime`. For 30-day files with persistent state, individual
+and user-wide revocation, current Keycloak authorization on every connection,
+and fresh authentication on renewal, configure
+[persistent Keycloak credentials](docs/persistent-credentials.md).
 
 A rule with `deny: true` keeps the matching users out of the gateway
 completely: they cannot log in and cannot reach any host. A rule that
-selects a group applies to the users whose group membership the gateway does
-not know, so that it does not fail open for them.
+selects a group cannot grant access when membership is unknown. Group denies
+fail closed for unknown membership, including mixed user and group selectors.
 
 For the complete description see the [Access Control Documentation](docs/access-control.md).
 

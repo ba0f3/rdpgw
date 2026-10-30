@@ -1,11 +1,13 @@
 package web
 
 import (
+	"context"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/identity"
 	"github.com/gorilla/sessions"
 	"log"
 	"net/http"
 	"os"
+	"time"
 )
 
 const (
@@ -22,6 +24,8 @@ const (
 var MaxAge = defaultSessionLifetime
 
 var sessionStore sessions.Store
+
+type sessionRequestKey struct{}
 
 // InitStore initializes the session store. The lifetime is the time the
 // user has to download the .rdp file before the session expires. It is not
@@ -51,20 +55,39 @@ func InitStore(sessionKey []byte, encryptionKey []byte, storeType string, maxLen
 		}
 		log.Printf("Setting maximum session storage to %d bytes", maxLength)
 		fs.MaxLength(maxLength)
+		fs.MaxAge(max(MaxAge, int(CacheExpiration.Seconds())))
+		fs.Options.Secure = true
+		fs.Options.HttpOnly = true
+		fs.Options.SameSite = http.SameSiteLaxMode
 
 		sessionStore = fs
 	} else {
 		log.Println("Cookies are used as session storage")
-		sessionStore = sessions.NewCookieStore(sessionKey, encryptionKey)
+		cs := sessions.NewCookieStore(sessionKey, encryptionKey)
+		cs.MaxAge(max(MaxAge, int(CacheExpiration.Seconds())))
+		cs.Options.Secure = true
+		cs.Options.HttpOnly = true
+		cs.Options.SameSite = http.SameSiteLaxMode
+		sessionStore = cs
 	}
 }
 
 func GetSession(r *http.Request) (*sessions.Session, error) {
+	if cached, ok := r.Context().Value(sessionRequestKey{}).(*sessions.Session); ok {
+		return cached, nil
+	}
 	session, err := sessionStore.Get(r, rdpGwSession)
 	if err != nil {
-		return nil, err
+		// Invalid or expired cookies start a new anonymous session.
+		session, err = sessionStore.New(&http.Request{Header: make(http.Header)}, rdpGwSession)
 	}
-	return session, nil
+	if err == nil {
+		// Gorilla's registry retains a decoding error for the request. Keep
+		// the recovered anonymous session so later state/PKCE writes use the
+		// same session instead of creating another empty one on every call.
+		*r = *r.WithContext(context.WithValue(r.Context(), sessionRequestKey{}, session))
+	}
+	return session, err
 }
 
 func GetSessionIdentity(r *http.Request) (identity.Identity, error) {
@@ -79,7 +102,18 @@ func GetSessionIdentity(r *http.Request) (identity.Identity, error) {
 
 	}
 	id := identity.NewUser()
-	id.Unmarshal(idData.([]byte))
+	data, ok := idData.([]byte)
+	if !ok {
+		return nil, nil
+	}
+	if err := id.Unmarshal(data); err != nil {
+		return nil, nil
+	}
+	if id.Authenticated() && (id.AuthTime().IsZero() || time.Now().Add(time.Minute).Before(id.AuthTime()) ||
+		!time.Now().Before(id.AuthTime().Add(time.Duration(MaxAge)*time.Second)) ||
+		(!id.Expiry().IsZero() && !time.Now().Before(id.Expiry()))) {
+		return nil, nil
+	}
 	return id, nil
 }
 
@@ -89,6 +123,9 @@ func SaveSessionIdentity(r *http.Request, w http.ResponseWriter, id identity.Ide
 		return err
 	}
 	session.Options.MaxAge = MaxAge
+	session.Options.HttpOnly = true
+	session.Options.Secure = true
+	session.Options.SameSite = http.SameSiteLaxMode
 
 	idData, err := id.Marshal()
 	if err != nil {

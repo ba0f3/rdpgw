@@ -216,11 +216,9 @@ func (rb *Builder) ApplyOverrides(values map[string][]string, allowed []string) 
 	return nil
 }
 
-// policyControlledKeys are the RDP settings that the gateway enforces
-// through its access policy. They can never be overridden through the URL,
-// not even when the operator puts them on the allow-list. The redirect
-// policy of the gateway is the authority for these settings, a client that
-// could turn them on would bypass the policy.
+// policyControlledKeys are generated from policy and cannot be overridden
+// through the URL. Destination hosts must enforce these limits against a
+// client that ignores the advertised settings.
 var policyControlledKeys = map[string]struct{}{
 	"redirectclipboard":    {},
 	"redirectprinters":     {},
@@ -246,9 +244,8 @@ func (rb *Builder) Force(names ...string) {
 }
 
 // ApplyRedirectPolicy writes the redirect settings of the .rdp file so that
-// they match the access policy of the user. The gateway enforces the very
-// same policy in the tunnel authorization response, the file only makes the
-// client side consistent with the policy of the gateway.
+// they match the access policy of the user. The tunnel authorization response
+// advertises the same policy. Neither filters encrypted RDP payloads.
 func (rb *Builder) ApplyRedirectPolicy(policy access.Policy) {
 	rb.Settings.RedirectClipboard = policy.Clipboard
 	rb.Settings.RedirectPrinters = policy.Printer
@@ -257,7 +254,7 @@ func (rb *Builder) ApplyRedirectPolicy(policy access.Policy) {
 	rb.Settings.RedirectWebAuthn = policy.WebAuthn
 	rb.Settings.RedirectLocation = policy.Location
 	rb.Settings.DriveStoreRedirect = redirectList(policy.Drive)
-	rb.Settings.DeviceStoreRedirect = deviceTypes(policy)
+	rb.Settings.DeviceStoreRedirect = redirectList(policy.Pnp)
 	rb.Settings.CameraStoreRedirect = redirectList(policy.Camera)
 	rb.Settings.UsbDeviceStoRedirect = redirectList(policy.Usb)
 
@@ -273,40 +270,6 @@ func (rb *Builder) ApplyRedirectPolicy(policy access.Policy) {
 		"CameraStoreRedirect",
 		"UsbDeviceStoRedirect",
 	)
-}
-
-// deviceTypes returns the device types the client may redirect to the
-// session. The device types are listed one by one, so that a single type
-// can be denied: the generic device redirection does not imply the camera
-// or the USB devices of the client. The wildcard is only used when every
-// device type is allowed.
-func deviceTypes(policy access.Policy) string {
-	types := []string{}
-
-	if policy.Port {
-		types = append(types, "port")
-	}
-	if policy.SmartCard {
-		types = append(types, "smartcard")
-	}
-	if policy.Usb {
-		types = append(types, "usb")
-	}
-	if policy.Camera {
-		types = append(types, "camera")
-	}
-
-	if len(types) == 0 {
-		return ""
-	}
-
-	if policy.Pnp && policy.Port && policy.SmartCard && policy.Usb && policy.Camera {
-		// every device type is allowed, the wildcard covers the types
-		// that are not known here as well
-		return "*"
-	}
-
-	return strings.Join(types, ",")
 }
 
 // redirectList returns the value of a setting that lists the resources of

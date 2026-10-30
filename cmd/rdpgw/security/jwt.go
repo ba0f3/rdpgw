@@ -57,14 +57,21 @@ type customClaims struct {
 	// matches on it, it restores the membership that was resolved when
 	// the .rdp file was handed out.
 	Groups []string `json:"groups,omitempty"`
+	// Preserve verified empty membership instead of decoding it as unknown.
+	GroupsKnown bool `json:"groupsKnown,omitempty"`
 	// Redirect is the redirect policy that applies to the session. It is
-	// signed into the token so that the gateway enforces the policy that
+	// signed into the token so that the gateway advertises the policy that
 	// was applied when the .rdp file was handed out.
 	Redirect *access.Policy `json:"redirect,omitempty"`
 }
 
 func CheckSession(next protocol.CheckHostFunc) protocol.CheckHostFunc {
 	return func(ctx context.Context, host string) (bool, error) {
+		if CredentialManager != nil {
+			if ok, err := CredentialManager.Recheck(ctx); !ok || err != nil {
+				return false, err
+			}
+		}
 		tunnel := getTunnel(ctx)
 		if tunnel == nil {
 			return false, errors.New("no valid session info found in context")
@@ -87,6 +94,9 @@ func CheckSession(next protocol.CheckHostFunc) protocol.CheckHostFunc {
 }
 
 func CheckPAACookie(ctx context.Context, tokenString string) (bool, error) {
+	if CredentialManager != nil {
+		return CredentialManager.Check(ctx, tokenString)
+	}
 	if tokenString == "" {
 		log.Printf("no token to parse")
 		return false, errors.New("no token to parse")
@@ -144,6 +154,9 @@ func CheckPAACookie(ctx context.Context, tokenString string) (bool, error) {
 	}
 	tunnel.User.SetUserName(userName)
 	tunnel.User.SetGroups(custom.Groups)
+	if custom.GroupsKnown {
+		tunnel.User.SetAttribute(identity.AttrGroupsKnown, true)
+	}
 
 	// The redirect policy of the session is signed into the token. It is
 	// the policy that was resolved for the user when the .rdp file was
@@ -164,6 +177,9 @@ func CheckPAACookie(ctx context.Context, tokenString string) (bool, error) {
 }
 
 func GeneratePAAToken(ctx context.Context, username string, server string) (string, error) {
+	if CredentialManager != nil {
+		return CredentialManager.Issue(ctx, server)
+	}
 	if len(SigningKey) < 32 {
 		return "", errors.New("token signing key not long enough or not specified")
 	}
@@ -204,6 +220,7 @@ func GeneratePAAToken(ctx context.Context, username string, server string) (stri
 	if id != nil {
 		private.User = id.UserName()
 		private.Groups = id.Groups()
+		private.GroupsKnown = id.GetAttribute(identity.AttrGroupsKnown) == true
 	}
 
 	if token, err := jwt.Signed(sig).Claims(standard).Claims(private).Serialize(); err != nil {

@@ -8,29 +8,21 @@ has three parts:
 2. the **host ACL** — which remote hosts the user may connect to
 3. the **group allow-list** — which users may log in at all (OpenID Connect)
 
-The policy is a policy of the gateway. It is not a client side default and it
-does not depend on the contents of the `.rdp` template.
+Host ACLs are enforced by the gateway. Redirection limits are advertised to
+clients and require enforcement on destination hosts when clients are untrusted.
+See [destination host enforcement](redirection-enforcement.md).
 
 ## The redirect policy
 
-### Where it is enforced
+### Where it is applied
 
-The resolved policy is applied in three places:
+The tunnel authorization response carries session redirection flags. The
+credential binds the initial policy to its user and host. The generated `.rdp`
+file contains matching settings. These controls guide cooperating clients;
+the gateway does not filter clipboard or drive data inside the RDP payload.
 
-* The **tunnel authorization response** carries the redirect flags of the
-  session. This is the authoritative enforcement: the client has to honour
-  the flags the gateway sends, they are not a request but an instruction.
-* The **gateway access token** (the credential that is embedded in the
-  `.rdp` file) carries the resolved policy in a signed claim. The gateway
-  replays that policy when the client connects, so the restriction stays
-  bound to the user the file was issued for.
-* The **generated `.rdp` file** is rewritten so that its redirect settings
-  match the policy. This keeps the client side consistent with the gateway.
-
-The redirect settings are *policy controlled*: they can never be overridden
-through the `/connect` URL query parameters, not even when the operator
-lists them in `client.rdpoverridablekeys`. A request that tries to do so is
-rejected with `400 Bad Request`.
+Redirect settings cannot be overridden through `/connect` query parameters,
+even if listed in `client.rdpoverridablekeys`. Such requests return 400.
 
 ### The ceiling and the rules
 
@@ -42,9 +34,9 @@ global policy denies has no effect.
 The ceiling holds for the whole life of a session. The policy that is
 signed into the gateway access token is narrowed by the policy that is
 configured when the client connects: a token that was issued under a looser
-policy does not widen the policy of the gateway. A token that carries no
-policy at all is refused, the gateway does not guess what the user was
-allowed to do.
+policy does not widen the policy of the gateway. In legacy JWT mode a token
+without a redirect claim advertises `DisableAll`. Persistent mode rejects
+legacy JWT credentials and requires an active stored record.
 
 ```yaml
 Caps:
@@ -61,32 +53,23 @@ Caps:
   EnableUsb: false
 ```
 
-| Setting | Resource | Enforced on the wire |
-|---------|----------|----------------------|
-| `EnableClipboard` | the clipboard of the client | yes |
-| `EnableDrive` | the drives (folders) of the client | yes |
-| `EnablePrinter` | the printers of the client | yes |
-| `EnablePort` | the serial and COM ports of the client | yes |
-| `EnablePnp` | the plug and play devices of the client | yes |
-| `EnableSmartCard` | the smartcards of the client | no, client side only |
-| `EnableWebAuthn` | the WebAuthn prompts of the client | no, client side only |
-| `EnableLocation` | the location information of the client | no, client side only |
-| `EnableCamera` | the cameras of the client | no, client side only |
-| `EnableUsb` | the USB devices of the client | no, client side only |
+| Setting | Resource | Gateway advertisement |
+|---------|----------|-----------------------|
+| `EnableClipboard` | Clipboard | Tunnel flag and RDP property |
+| `EnableDrive` | Drives and folders | Tunnel flag and RDP property |
+| `EnablePrinter` | Printers | Tunnel flag and RDP property |
+| `EnablePort` | Serial and COM ports | Tunnel flag and RDP property |
+| `EnablePnp` | MTP/PTP devices | Tunnel flag and RDP property |
+| `EnableSmartCard` | Smartcards | RDP property |
+| `EnableWebAuthn` | WebAuthn prompts | RDP property |
+| `EnableLocation` | Location | RDP property |
+| `EnableCamera` | Cameras | RDP property |
+| `EnableUsb` | USB devices | RDP property |
 
-The resources without a wire enforcement are controlled by the settings of
-the `.rdp` file only. The RDP gateway protocol has no flag for them, the
-gateway cannot refuse them. The signature of the `.rdp` file does not cover
-`redirectlocation`, `redirectwebauthn`, `camerastoredirect` and
-`usbdevicestoredirect` either, so those settings have to be treated as
-advisory when the file travels through an untrusted channel. Sign the file
-with `client.signingcert` and `client.signingkey` to protect the rest.
-
-The device redirection of the client is listed per device type: the camera
-and the USB devices of the client are their own resources, they are not
-implied by `EnablePnp`. The `devicestoredirect` setting of the `.rdp` file
-lists the device types that are allowed (`port`, `smartcard`, `usb`,
-`camera`), the wildcard is only used when every type is allowed.
+Every row requires destination enforcement against a client that ignores the
+advertisement. File signatures do not control what client software executes.
+`devicestoredirect` uses `*` or an empty selector for MTP/PTP, controlled by
+`EnablePnp`. Camera, USB, smartcard and serial redirection have separate keys.
 
 `caps.disableredirect` disables every redirection at once, `caps.redirectall`
 enables every redirection at once. They are mutually exclusive, the disable
@@ -131,13 +114,12 @@ A rule with `deny: true` refuses the matching users access to the gateway
 completely: they cannot log in and none of the hosts is reachable for them.
 It is the way to keep a user or a group out.
 
-A rule that selects a **group** also applies to the users whose group
-membership the gateway does not know: the gateway cannot tell whether they
-are a member of the group, and a rule that selects a group must not fail
-open for them. The authentication methods that cannot deliver a group
-membership (Kerberos, NTLM and the local authentication) are therefore
-matched by the `groups` of a rule as well — plan for that, or use `users`
-for those deployments.
+An unknown group membership never matches a group allow. A group deny also
+denies unknown membership, including rules that have both `Users` and `Groups`.
+If group rules exist and no explicit user allow matches, unknown membership
+is denied. A verified empty group list matches no group selector. Native
+authentication methods without group information should use explicit user
+rules or obtain verified membership before group authorization.
 
 The host list of a rule may contain the `{{ preferred_username }}`
 placeholder, it is replaced with the name of the user.
@@ -219,17 +201,12 @@ that your provider uses for the group membership, for Keycloak that is
 `groups`. The provider has to be configured to put the groups of the user in
 the claim, for Keycloak that is a client scope with a groups mapper.
 
-The group membership that the gateway reads from the ID token is also the
-group membership that the rules of the `access` section match on. The
-membership is a snapshot that is taken at the login: a user that loses the
-group keeps the access of the session until it expires, keep
-`server.sessionlifetime` short when that matters.
-
-The group membership is signed into the gateway access token, so the rules
-that select users by their group apply to the session of the `.rdp` file as
-well. The authentication methods that cannot deliver a group membership
-(Kerberos, NTLM and the local authentication) can only be matched by the
-`users` of a rule.
+In legacy JWT mode, ID token groups are a snapshot at browser login and are
+copied into downloaded credentials. Keep both lifetimes short in that mode.
+For current membership on every connection, use
+[persistent Keycloak credentials](persistent-credentials.md). That mode reads
+the current user and groups through the Keycloak Admin API before authorization
+and refuses stale, revoked, disabled or unavailable identities.
 
 With header authentication the groups are taken from a header:
 
@@ -246,7 +223,13 @@ The value of the header is a comma separated list of group names.
 ## The lifetime of the credentials
 
 The `.rdp` file carries a gateway access token. Its lifetime determines how
-long the file stays usable, it is independent of the session in the browser.
+long the file stays usable. The browser session has a separate server-enforced
+expiry. An expired browser session starts a fresh OIDC authentication.
+
+For 30-day files with individual and user-wide revocation, follow
+[the persistent credential configuration](persistent-credentials.md). Lifetimes
+over one day require that mode. Its deadline is measured from the provider's
+verified authentication time, so repeated downloads do not extend it.
 
 ```yaml
 Security:

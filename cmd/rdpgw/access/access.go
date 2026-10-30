@@ -7,11 +7,9 @@
 //     redirected into the remote session
 //   - which remote hosts the user may connect to
 //
-// The policy is enforced by the gateway itself and not by the client. The
-// resolved redirect policy is signed into the gateway access token and
-// replayed in the tunnel authorization response, the generated .rdp file
-// is rewritten to match it and the redirect settings can never be
-// overridden through the URL.
+// Host ACLs are enforced at the gateway. Redirection settings are advertised
+// to clients, but destination session hosts must enforce redirection limits
+// against clients that ignore these settings. The gateway relays opaque RDP.
 //
 // The default policy is the ceiling: a rule can only narrow it, never widen
 // it. That keeps the global configuration in control of what is possible in
@@ -144,6 +142,9 @@ func NewEngine(defaultPolicy Policy, rules []Rule) *Engine {
 // PolicyFor returns the effective redirect policy for the identity.
 func (e *Engine) PolicyFor(id identity.Identity) Policy {
 	policy := e.defaultPolicy
+	if policy.DisableAll {
+		return Policy{DisableAll: true}
+	}
 
 	rule := e.RuleFor(id)
 	if rule == nil {
@@ -196,7 +197,8 @@ func (e *Engine) RuleFor(id identity.Identity) *Rule {
 	groups := id.Groups()
 
 	for i := range e.rules {
-		if e.rules[i].Deny && e.rules[i].matches(user, groups) {
+		unknownGroups := len(groups) == 0 && id.GetAttribute(identity.AttrGroupsKnown) != true
+		if e.rules[i].Deny && (e.rules[i].matches(user, groups) || (unknownGroups && len(e.rules[i].Groups) > 0)) {
 			return &e.rules[i]
 		}
 	}
@@ -205,6 +207,9 @@ func (e *Engine) RuleFor(id identity.Identity) *Rule {
 		if e.rules[i].matches(user, groups) {
 			return &e.rules[i]
 		}
+	}
+	if len(groups) == 0 && id.GetAttribute(identity.AttrGroupsKnown) != true && e.HasGroupRules() {
+		return &Rule{Name: "unknown group membership", Deny: true}
 	}
 
 	return nil
@@ -220,11 +225,8 @@ func (e *Engine) Denied(id identity.Identity) bool {
 // matches reports whether the rule applies to the user or to one of the
 // groups the user is a member of.
 //
-// A rule that selects a group also applies to the users whose group
-// membership the gateway does not know: the gateway cannot tell whether
-// they are a member of the group, and a rule that selects a group must not
-// fail open for them. A rule that selects a user by name needs no group
-// membership and is not affected.
+// Only known groups match an allow. RuleFor handles unknown membership
+// conservatively for denies and users with no explicit user allow.
 func (r *Rule) matches(user string, groups []string) bool {
 	for _, u := range r.Users {
 		u = strings.TrimSpace(u)
@@ -240,9 +242,10 @@ func (r *Rule) matches(user string, groups []string) bool {
 		return false
 	}
 
+	// An unknown membership can match a deny, never an allow. RuleFor
+	// distinguishes a verified empty membership from missing membership.
 	if len(groups) == 0 {
-		// The group membership is unknown.
-		return len(r.Users) == 0
+		return false
 	}
 
 	for _, g := range r.Groups {
@@ -365,8 +368,7 @@ func hostMatches(allowed string, host string) bool {
 }
 
 // HasGroupRules reports whether the engine holds rules that select users by
-// their group membership. Such rules only apply to the users whose group
-// membership is known to the gateway.
+// their group membership.
 func (e *Engine) HasGroupRules() bool {
 	for i := range e.rules {
 		if len(e.rules[i].Groups) > 0 {

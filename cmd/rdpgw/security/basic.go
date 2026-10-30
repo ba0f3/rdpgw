@@ -36,7 +36,7 @@ func warnAboutGroupRules(id identity.Identity) {
 		}
 
 		if id == nil || len(id.Groups()) == 0 {
-			log.Printf("WARNING: the access policy holds rules that select users by their group, they do not apply to the session of %s because the gateway does not know the group membership", user)
+			log.Printf("WARNING: group membership is unknown for %s; group allow rules cannot grant access and group deny rules fail closed", user)
 		}
 	})
 }

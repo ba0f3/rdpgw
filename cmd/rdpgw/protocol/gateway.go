@@ -39,6 +39,9 @@ type Gateway struct {
 	// CheckHost verifies if the client is allowed to connect to the remote host
 	CheckHost CheckHostFunc
 
+	// DialHost resolves, validates and connects to the approved destination.
+	DialHost func(context.Context, string) (net.Conn, error)
+
 	// RedirectFlags sets what devices the client is allowed to redirect to the remote host
 	RedirectFlags RedirectFlags
 
@@ -51,6 +54,10 @@ type Gateway struct {
 	// TokenAuth sets whether to use token/cookie based authentication
 	TokenAuth bool
 
+	// WebSocketOnly refuses anonymous two-request HTTP pairing. Persistent
+	// OIDC credentials authenticate inside the single WebSocket transport.
+	WebSocketOnly bool
+
 	ReceiveBuf int
 	SendBuf    int
 }
@@ -59,6 +66,11 @@ var upgrader = websocket.Upgrader{}
 var c = cache.New(5*time.Minute, 10*time.Minute)
 
 func (g *Gateway) HandleGatewayProtocol(w http.ResponseWriter, r *http.Request) {
+	if g.WebSocketOnly && (r.Method != MethodRDGOUT || !headerHasToken(r.Header, "Connection", "upgrade") || !headerHasToken(r.Header, "Upgrade", "websocket")) {
+		w.Header().Set("Upgrade", "websocket")
+		http.Error(w, "this authentication mode requires an RDP client with WebSocket gateway transport", http.StatusUpgradeRequired)
+		return
+	}
 	connectionCache.Set(float64(c.ItemCount()))
 
 	var t *Tunnel

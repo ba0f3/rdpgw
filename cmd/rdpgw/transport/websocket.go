@@ -10,6 +10,7 @@ type WSPKT struct {
 }
 
 func NewWS(c *websocket.Conn) (*WSPKT, error) {
+	c.SetReadLimit(1 << 20)
 	w := &WSPKT{Conn: c}
 	return w, nil
 }

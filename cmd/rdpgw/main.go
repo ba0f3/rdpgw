@@ -16,6 +16,8 @@ import (
 	"github.com/bolkedebruin/gokrb5/v8/spnego"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/access"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/config"
+	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/credentials"
+	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/destination"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/kdcproxy"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/protocol"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/security"
@@ -116,6 +118,24 @@ func main() {
 	security.PAATokenLifetime = conf.Security.PAATokenLifetime
 	security.UserTokenLifetime = conf.Security.UserTokenLifetime
 	security.QueryTokenLifetime = conf.Security.QueryTokenLifetime
+	if conf.Security.CredentialStore != "" {
+		store, err := credentials.Open(conf.Security.CredentialStore)
+		if err != nil {
+			log.Fatalf("cannot open credential store: %v", err)
+		}
+		defer store.Close()
+		if err := store.BindIssuer(conf.OpenId.ProviderUrl); err != nil {
+			log.Fatalf("cannot bind credential issuer: %v", err)
+		}
+		resolver, err := security.NewKeycloakResolver(security.KeycloakConfig{
+			Issuer: conf.OpenId.ProviderUrl, ClientID: conf.OpenId.AdminClientId, ClientSecret: conf.OpenId.AdminClientSecret,
+			GroupFormat: conf.OpenId.AdminGroupFormat, AllowedGroups: conf.OpenId.Groups,
+		})
+		if err != nil {
+			log.Fatalf("cannot configure current Keycloak authorization: %v", err)
+		}
+		security.CredentialManager = &security.CredentialService{Store: store, Resolve: resolver.Resolve}
+	}
 
 	// set up the access policy. The capabilities of the gateway are the
 	// ceiling of the policy, the rules can only narrow it.
@@ -228,8 +248,13 @@ func main() {
 		IdleTimeout:   conf.Caps.IdleTimeout,
 		SmartCardAuth: conf.Caps.SmartCardAuth,
 		TokenAuth:     conf.Caps.TokenAuth,
+		WebSocketOnly: security.CredentialManager != nil,
 		ReceiveBuf:    conf.Server.ReceiveBuf,
 		SendBuf:       conf.Server.SendBuf,
+	}
+	if conf.Server.HostSelection == "any" {
+		policy := destination.New(conf.Server.AllowedDestinationPorts, conf.Server.AllowPrivateDestinations)
+		gw.DialHost = policy.DialContext
 	}
 
 	if conf.Caps.TokenAuth {
@@ -260,6 +285,12 @@ func main() {
 	if conf.Server.OpenIDEnabled() {
 		log.Printf("enabling openid extended authentication")
 		o := initOIDC(url)
+		if security.CredentialManager != nil {
+			credentialAPI := &web.CredentialAPI{Service: security.CredentialManager, AdminGroups: conf.OpenId.CredentialAdminGroups, Origin: url.Scheme + "://" + url.Host}
+			api.Handle("/credentials", o.Authenticated(credentialAPI)).Methods(http.MethodGet)
+			api.Handle("/credentials/{id}", o.Authenticated(credentialAPI)).Methods(http.MethodDelete)
+			api.Handle("/users/{subject}/credentials", o.Authenticated(credentialAPI)).Methods(http.MethodDelete)
+		}
 		r.Handle("/connect", o.Authenticated(http.HandlerFunc(h.HandleDownload)))
 		r.HandleFunc("/callback", o.HandleCallback)
 

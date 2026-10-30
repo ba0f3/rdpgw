@@ -23,7 +23,7 @@ func TestApplyRedirectPolicyDenied(t *testing.T) {
 		"drivestoredirect:s:" + CRLF,
 		"devicestoredirect:s:" + CRLF,
 	} {
-		if !strings.Contains(s, want) {
+		if !strings.Contains(CRLF+s, CRLF+want) {
 			t.Errorf("rendered file does not contain %q, got:\n%s", want, s)
 		}
 	}
@@ -52,7 +52,7 @@ func TestApplyRedirectPolicyAllowed(t *testing.T) {
 		"camerastoredirect:s:*" + CRLF,
 		"usbdevicestoredirect:s:*" + CRLF,
 	} {
-		if !strings.Contains(s, want) {
+		if !strings.Contains(CRLF+s, CRLF+want) {
 			t.Errorf("rendered file does not contain %q, got:\n%s", want, s)
 		}
 	}
@@ -77,8 +77,8 @@ func TestApplyRedirectPolicyCameraAndUsbAreIndependent(t *testing.T) {
 		}
 	}
 
-	if deviceList != "usb" {
-		t.Errorf("the device list is %q, want usb", deviceList)
+	if deviceList != "*" {
+		t.Errorf("the MTP/PTP device list is %q, want *", deviceList)
 	}
 	if !strings.Contains(s, "camerastoredirect:s:"+CRLF) {
 		t.Errorf("the camera is not disabled, got:\n%s", s)
@@ -88,15 +88,15 @@ func TestApplyRedirectPolicyCameraAndUsbAreIndependent(t *testing.T) {
 	}
 }
 
-// The device redirection without a device type does not redirect anything.
-func TestApplyRedirectPolicyPnpWithoutTypes(t *testing.T) {
+// Pnp selects MTP/PTP independently of USB, camera and serial ports.
+func TestApplyRedirectPolicyPnpWithoutOtherResources(t *testing.T) {
 	b := NewBuilder()
 	b.ApplyRedirectPolicy(access.Policy{Pnp: true})
 
 	s := b.String()
 
-	if !strings.Contains(s, "devicestoredirect:s:"+CRLF) {
-		t.Errorf("the device list is not empty, got:\n%s", s)
+	if !strings.Contains(CRLF+s, CRLF+"devicestoredirect:s:*"+CRLF) {
+		t.Errorf("the MTP/PTP wildcard is missing, got:\n%s", s)
 	}
 	if !strings.Contains(s, "camerastoredirect:s:"+CRLF) {
 		t.Errorf("the camera is not disabled, got:\n%s", s)

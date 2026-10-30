@@ -29,6 +29,8 @@ type Tunnel struct {
 	RemoteAddr string
 	// User
 	User identity.Identity
+	// CredentialID is the public hash used for the final revocation check.
+	CredentialID string
 	// RedirectFlags is the redirect policy that applies to this session.
 	// It is resolved from the identity of the user or, when the client
 	// authenticates with a gateway access token, from the policy that is

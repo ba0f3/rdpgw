@@ -140,6 +140,11 @@ type OpenIDConfig struct {
 	ProviderUrl  string `koanf:"providerurl"`
 	ClientId     string `koanf:"clientid"`
 	ClientSecret string `koanf:"clientsecret"`
+	// A separate service account reads current users/groups on every connection.
+	AdminClientId         string   `koanf:"adminclientid"`
+	AdminClientSecret     string   `koanf:"adminclientsecret"`
+	AdminGroupFormat      string   `koanf:"admingroupformat"`
+	CredentialAdminGroups []string `koanf:"credentialadmingroups"`
 	// Groups is the list of groups a user must be a member of to be
 	// allowed to log in to the gateway. An empty list (the default) allows
 	// every user the OpenID Connect provider authenticates.
@@ -244,6 +249,8 @@ type AccessRedirect struct {
 }
 
 type SecurityConfig struct {
+	// CredentialStore enables persistent, revocable Keycloak credentials.
+	CredentialStore        string `koanf:"credentialstore"`
 	PAATokenEncryptionKey  string `koanf:"paatokenencryptionkey"`
 	PAATokenSigningKey     string `koanf:"paatokensigningkey"`
 	UserTokenEncryptionKey string `koanf:"usertokenencryptionkey"`
@@ -337,7 +344,7 @@ func Load(configFile string) Configuration {
 		"Client.NetworkAutoDetect":    1,
 		"Client.BandwidthAutoDetect":  1,
 		"Security.VerifyClientIp":     true,
-		"Security.PAATokenLifetime":   5,
+		"Security.PAATokenLifetime":   0,
 		"Security.UserTokenLifetime":  5,
 		"Security.QueryTokenLifetime": 5,
 		"Caps.TokenAuth":              true,
@@ -368,14 +375,44 @@ func Load(configFile string) Configuration {
 	}
 
 	koanfTag := koanf.UnmarshalConf{Tag: "koanf"}
-	k.UnmarshalWithConf("Server", &Conf.Server, koanfTag)
-	k.UnmarshalWithConf("OpenId", &Conf.OpenId, koanfTag)
-	k.UnmarshalWithConf("Header", &Conf.Header, koanfTag)
-	k.UnmarshalWithConf("Caps", &Conf.Caps, koanfTag)
-	k.UnmarshalWithConf("Access", &Conf.Access, koanfTag)
-	k.UnmarshalWithConf("Security", &Conf.Security, koanfTag)
-	k.UnmarshalWithConf("Client", &Conf.Client, koanfTag)
-	k.UnmarshalWithConf("Kerberos", &Conf.Kerberos, koanfTag)
+	for _, section := range []struct {
+		name   string
+		target interface{}
+	}{
+		{"Server", &Conf.Server}, {"OpenId", &Conf.OpenId}, {"Header", &Conf.Header},
+		{"Caps", &Conf.Caps}, {"Access", &Conf.Access}, {"Security", &Conf.Security},
+		{"Client", &Conf.Client}, {"Kerberos", &Conf.Kerberos},
+	} {
+		if err := k.UnmarshalWithConf(section.name, section.target, koanfTag); err != nil {
+			log.Fatalf("refusing invalid %s configuration: %v", section.name, err)
+		}
+	}
+	if Conf.Security.CredentialStore != "" {
+		if !Conf.Server.OpenIDEnabled() || len(Conf.Server.Authentication) != 1 || !Conf.Caps.TokenAuth {
+			log.Fatal("persistent credentials require openid-only authentication and tokenauth")
+		}
+		if _, err := security.NewKeycloakResolver(security.KeycloakConfig{
+			Issuer: Conf.OpenId.ProviderUrl, ClientID: Conf.OpenId.AdminClientId, ClientSecret: Conf.OpenId.AdminClientSecret, GroupFormat: Conf.OpenId.AdminGroupFormat,
+		}); err != nil {
+			log.Fatalf("invalid persistent credential authorization configuration: %v", err)
+		}
+		if Conf.Security.PAATokenLifetime == 0 {
+			Conf.Security.PAATokenLifetime = 30 * 24 * 60
+		}
+		if Conf.Security.PAATokenLifetime > 30*24*60 {
+			log.Fatal("persistent credential lifetime cannot exceed 30 days")
+		}
+		if Conf.Security.EnableUserToken {
+			log.Fatal("persistent credentials require EnableUserToken:false; authenticate to the destination separately")
+		}
+	} else if Conf.Security.PAATokenLifetime > 24*60 {
+		log.Fatal("gateway credentials lasting over one day require Security.CredentialStore and live Keycloak authorization")
+	}
+	for _, port := range Conf.Server.AllowedDestinationPorts {
+		if port < 1 || port > 65535 {
+			log.Fatal("destination port must be between 1 and 65535")
+		}
+	}
 
 	if err := checkDefaultSecrets(&Conf); err != nil {
 		log.Fatalf("refusing to start: %s", err)
@@ -422,6 +459,9 @@ func Load(configFile string) Configuration {
 
 	if !Conf.Caps.TokenAuth && Conf.Server.OpenIDEnabled() {
 		log.Fatalf("openid is configured but tokenauth disabled")
+	}
+	if !Conf.Caps.TokenAuth && Conf.Server.HeaderEnabled() {
+		log.Fatal("header authentication requires tokenauth")
 	}
 
 	if Conf.Server.KerberosEnabled() && Conf.Kerberos.Keytab == "" {

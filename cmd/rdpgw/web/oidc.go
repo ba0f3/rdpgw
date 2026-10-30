@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/identity"
+	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/security"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 )
@@ -18,6 +19,8 @@ const (
 	CacheExpiration = time.Minute * 2
 	CleanupInterval = time.Minute * 5
 	oidcStateKey    = "OIDCSTATE"
+	oidcStartedKey  = "OIDCSTARTED"
+	oidcVerifierKey = "OIDCVERIFIER"
 )
 
 type OIDC struct {
@@ -58,6 +61,9 @@ func (c *OIDCConfig) New() *OIDC {
 
 // storeOIDCState stores the OIDC state and redirect URL in the session
 func storeOIDCState(w http.ResponseWriter, r *http.Request, state string, redirectURL string) error {
+	if !strings.HasPrefix(redirectURL, "/") || strings.HasPrefix(redirectURL, "//") {
+		redirectURL = "/"
+	}
 	session, err := GetSession(r)
 	if err != nil {
 		return err
@@ -66,6 +72,8 @@ func storeOIDCState(w http.ResponseWriter, r *http.Request, state string, redire
 	// Store state data directly as a concatenated string: state + "|" + redirectURL
 	stateValue := state + "|" + redirectURL
 	session.Values[oidcStateKey] = stateValue
+	session.Values[oidcStartedKey] = time.Now().Unix()
+	session.Values[oidcVerifierKey] = oauth2.GenerateVerifier()
 	session.Options.MaxAge = int(CacheExpiration.Seconds())
 
 	return sessionStore.Save(r, w, session)
@@ -73,6 +81,9 @@ func storeOIDCState(w http.ResponseWriter, r *http.Request, state string, redire
 
 // getOIDCState retrieves the redirect URL for the given state from the session
 func getOIDCState(r *http.Request, state string) (string, bool) {
+	if state == "" {
+		return "", false
+	}
 	session, err := GetSession(r)
 	if err != nil {
 		log.Printf("Error getting session for OIDC state: %v", err)
@@ -88,6 +99,10 @@ func getOIDCState(r *http.Request, state string) (string, bool) {
 	stateValue, ok := stateData.(string)
 	if !ok {
 		log.Printf("Invalid OIDC state data format in session")
+		return "", false
+	}
+	started, ok := session.Values[oidcStartedKey].(int64)
+	if !ok || started > time.Now().Unix()+1 || time.Now().Unix()-started > int64(CacheExpiration.Seconds()) {
 		return "", false
 	}
 
@@ -112,7 +127,25 @@ func (h *OIDC) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	oauth2Token, err := h.oAuth2Config.Exchange(ctx, r.URL.Query().Get("code"))
+	session, err := GetSession(r)
+	if err != nil {
+		http.Error(w, "invalid login session", http.StatusBadRequest)
+		return
+	}
+	started, ok := session.Values[oidcStartedKey].(int64)
+	verifier, hasVerifier := session.Values[oidcVerifierKey].(string)
+	if !ok || !hasVerifier || verifier == "" {
+		http.Error(w, "invalid login session", http.StatusBadRequest)
+		return
+	}
+	delete(session.Values, oidcStateKey)
+	delete(session.Values, oidcStartedKey)
+	delete(session.Values, oidcVerifierKey)
+	if err := sessionStore.Save(r, w, session); err != nil {
+		http.Error(w, "cannot consume login state", http.StatusInternalServerError)
+		return
+	}
+	oauth2Token, err := h.oAuth2Config.Exchange(ctx, r.URL.Query().Get("code"), oauth2.VerifierOption(verifier))
 	if err != nil {
 		http.Error(w, "Failed to exchange token: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -144,6 +177,13 @@ func (h *OIDC) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// A fresh login requires evidence from the signed ID token. Request
+	// parameters alone do not prove the provider actually reauthenticated.
+	authTime, ok := data["auth_time"].(float64)
+	if !ok || authTime != float64(int64(authTime)) || int64(authTime) < started-1 || int64(authTime) > time.Now().Unix()+60 || idToken.Nonce != state {
+		http.Error(w, "fresh identity-provider authentication required", http.StatusUnauthorized)
+		return
+	}
 
 	id := identity.FromRequestCtx(r)
 
@@ -165,7 +205,7 @@ func (h *OIDC) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	id.SetUserName(userName)
 	id.SetGroups(groups)
-	id.SetAttribute(identity.AttrAccessToken, oauth2Token.AccessToken)
+	id.SetAttribute(identity.AttrSubject, idToken.Subject)
 
 	// The access policy can refuse the user even when the provider
 	// authenticated them. The user is not marked as authenticated before
@@ -175,7 +215,14 @@ func (h *OIDC) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id.SetAuthenticated(true)
-	id.SetAuthTime(time.Now())
+	id.SetAuthTime(time.Unix(int64(authTime), 0))
+	if security.CredentialManager != nil {
+		if err := security.CredentialManager.Login(ctx, id); err != nil {
+			id.SetAuthenticated(false)
+			http.Error(w, "current Keycloak authorization denied", http.StatusForbidden)
+			return
+		}
+	}
 
 	if err := SaveSessionIdentity(r, w, id); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -254,6 +301,11 @@ func findGroupsInClaims(data map[string]interface{}, claim string) []string {
 func (h *OIDC) Authenticated(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := identity.FromRequestCtx(r)
+		if id.Authenticated() && security.CredentialManager != nil {
+			if err := security.CredentialManager.Refresh(r.Context(), id); err != nil {
+				id.SetAuthenticated(false)
+			}
+		}
 
 		if !id.Authenticated() {
 			seed := make([]byte, 16)
@@ -272,7 +324,15 @@ func (h *OIDC) Authenticated(next http.Handler) http.Handler {
 				return
 			}
 
-			http.Redirect(w, r, h.oAuth2Config.AuthCodeURL(state), http.StatusFound)
+			session, err := GetSession(r)
+			if err != nil {
+				http.Error(w, "cannot read login session", http.StatusInternalServerError)
+				return
+			}
+			verifier, _ := session.Values[oidcVerifierKey].(string)
+			http.Redirect(w, r, h.oAuth2Config.AuthCodeURL(state,
+				oauth2.SetAuthURLParam("prompt", "login"), oauth2.SetAuthURLParam("max_age", "0"),
+				oauth2.SetAuthURLParam("nonce", state), oauth2.S256ChallengeOption(verifier)), http.StatusFound)
 			return
 		}
 
