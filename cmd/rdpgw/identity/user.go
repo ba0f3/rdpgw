@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/gob"
 	"github.com/google/uuid"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -114,6 +116,31 @@ func (u *User) Email() string {
 
 func (u *User) SetEmail(s string) {
 	u.email = s
+}
+
+// Groups returns the groups the user is a member of. The list is sorted so
+// that it is stable across calls and safe to log.
+func (u *User) Groups() []string {
+	groups := make([]string, 0, len(u.groupMembership))
+	for group := range u.groupMembership {
+		groups = append(groups, group)
+	}
+	sort.Strings(groups)
+	return groups
+}
+
+// SetGroups replaces the group membership of the user. Empty group names are
+// ignored.
+func (u *User) SetGroups(groups []string) {
+	membership := make(map[string]bool, len(groups))
+	for _, group := range groups {
+		group = strings.TrimSpace(group)
+		if group == "" {
+			continue
+		}
+		membership[group] = true
+	}
+	u.groupMembership = membership
 }
 
 func (u *User) Expiry() time.Time {

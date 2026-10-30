@@ -38,9 +38,63 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   See [UPGRADING.md](UPGRADING.md) for migration notes. The other
   host-selection modes (`roundrobin`, `signed`, `unsigned`) already used
   the operator-curated `Server.Hosts` list and are unaffected.
+- The redirect policy of the gateway is enforced as a policy of the gateway
+  and not as a default of the client. The resolved policy is signed into
+  the gateway access token and replayed in the tunnel authorization
+  response, and the generated `.rdp` file is rewritten to match it. The
+  redirect settings of the `.rdp` file can no longer be overridden through
+  the `/connect` URL query parameters, not even when they are listed in
+  `Client.RdpOverridableKeys`. See [UPGRADING.md](UPGRADING.md).
+- The `.rdp` file now always carries the redirect settings of the policy,
+  even when they carry the value the client uses by default.
+- `X-Forwarded-For` is only honored when it holds exactly one address, the
+  one the trusted proxy overwrote it with. A chain with more than one
+  address is ignored: a client that prepends an address to it produces the
+  same chain as a proxy that appends to it, so the gateway cannot tell
+  which part of the chain the proxy wrote. Taking an address of such a
+  chain let a client supply the address the gateway binds the credentials
+  of a session to, which made a stolen `.rdp` file usable from another
+  network behind a proxy. Proxies that forward the header have to
+  overwrite it (`proxy_set_header X-Forwarded-For $remote_addr;` in nginx).
+- A rule of the access section that selects a group also applies to the
+  users whose group membership the gateway does not know. It did not apply
+  to them before, which made a group rule fail open for the users of the
+  authentication methods that cannot deliver a group membership.
+- A rule with `deny: true` refuses the login now, in every authentication
+  method. It refused the hosts of a user before, the user could still log
+  in and download an `.rdp` file.
+- The camera and the USB devices of the client are their own resources:
+  `Caps.EnableCamera` and `Caps.EnableUsb` allow them, the device
+  redirection (`Caps.EnablePnp`) does not imply them anymore. The
+  `devicestoredirect` setting of the `.rdp` file lists the device types
+  that are allowed.
 
 ### Added
 
+- Access control policy. The `Access` section holds per user and per group
+  rules that narrow the redirect policy of the gateway and restrict the
+  remote hosts a user may connect to. The rules are evaluated in order, the
+  first rule that matches the user applies. The global policy in `Caps` is
+  the ceiling of the deployment, a rule can only narrow it. A rule with
+  `deny: true` keeps the matching users out completely. See
+  [docs/access-control.md](docs/access-control.md).
+- `OpenId.Groups` (`[]string`) restricts the login to the members of the
+  listed groups. A user that is not a member of one of them is refused with
+  `403 Forbidden`. `OpenId.GroupsClaim` (default `groups`) selects the claim
+  that carries the group membership, `OpenId.Scopes` (default
+  `openid profile email`) selects the scopes that are requested from the
+  provider.
+- `Header.GroupsHeader` carries the group membership of the user for header
+  authentication. The value is a comma separated list of group names.
+- `Caps.EnableSmartCard`, `Caps.EnableWebAuthn`, `Caps.EnableLocation`,
+  `Caps.EnableCamera` and `Caps.EnableUsb` (`bool`, default `false`) add
+  the smartcard, WebAuthn, location, camera and USB redirection to the
+  redirect policy of the gateway.
+- `Security.PAATokenLifetime`, `Security.UserTokenLifetime` and
+  `Security.QueryTokenLifetime` (`int`, minutes, default `5`) make the
+  lifetime of the credentials the gateway hands out configurable.
+- `Server.SessionLifetime` (`int`, seconds, default `120`) makes the
+  lifetime of the browser session configurable.
 - `rdpgw-auth --allow-uid` and `--allow-gid` flags (repeatable).
 - `Server.TrustedProxies` (`[]string`, CIDR, default empty).
 - `Server.AllowedDestinationPorts` (`[]int`, default `[3389]`).

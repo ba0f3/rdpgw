@@ -3,6 +3,7 @@ package rdp
 import (
 	"errors"
 	"fmt"
+	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/access"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/rdp/koanf/parsers/rdp"
 	"github.com/fatih/structs"
 	"github.com/go-viper/mapstructure/v2"
@@ -194,6 +195,9 @@ func (rb *Builder) ApplyOverrides(values map[string][]string, allowed []string) 
 		if !ok {
 			continue
 		}
+		if _, ok := policyControlledKeys[nk]; ok {
+			return fmt.Errorf("rdp option %q is controlled by the gateway access policy and cannot be overridden", k)
+		}
 		if _, ok := allow[nk]; !ok {
 			return fmt.Errorf("rdp option %q is not allowed to be overridden", k)
 		}
@@ -210,6 +214,108 @@ func (rb *Builder) ApplyOverrides(values map[string][]string, allowed []string) 
 		rb.forced[f.Name()] = struct{}{}
 	}
 	return nil
+}
+
+// policyControlledKeys are the RDP settings that the gateway enforces
+// through its access policy. They can never be overridden through the URL,
+// not even when the operator puts them on the allow-list. The redirect
+// policy of the gateway is the authority for these settings, a client that
+// could turn them on would bypass the policy.
+var policyControlledKeys = map[string]struct{}{
+	"redirectclipboard":    {},
+	"redirectprinters":     {},
+	"drivestoredirect":     {},
+	"devicestoredirect":    {},
+	"redirectcomports":     {},
+	"redirectlocation":     {},
+	"redirectsmartcards":   {},
+	"redirectwebauthn":     {},
+	"camerastoredirect":    {},
+	"usbdevicestoredirect": {},
+}
+
+// Force marks the given settings as explicitly set. They are always
+// serialized, even when their value equals the default of the client.
+func (rb *Builder) Force(names ...string) {
+	if rb.forced == nil {
+		rb.forced = make(map[string]struct{})
+	}
+	for _, name := range names {
+		rb.forced[name] = struct{}{}
+	}
+}
+
+// ApplyRedirectPolicy writes the redirect settings of the .rdp file so that
+// they match the access policy of the user. The gateway enforces the very
+// same policy in the tunnel authorization response, the file only makes the
+// client side consistent with the policy of the gateway.
+func (rb *Builder) ApplyRedirectPolicy(policy access.Policy) {
+	rb.Settings.RedirectClipboard = policy.Clipboard
+	rb.Settings.RedirectPrinters = policy.Printer
+	rb.Settings.RedirectComPorts = policy.Port
+	rb.Settings.RedirectSmartcards = policy.SmartCard
+	rb.Settings.RedirectWebAuthn = policy.WebAuthn
+	rb.Settings.RedirectLocation = policy.Location
+	rb.Settings.DriveStoreRedirect = redirectList(policy.Drive)
+	rb.Settings.DeviceStoreRedirect = deviceTypes(policy)
+	rb.Settings.CameraStoreRedirect = redirectList(policy.Camera)
+	rb.Settings.UsbDeviceStoRedirect = redirectList(policy.Usb)
+
+	rb.Force(
+		"RedirectClipboard",
+		"RedirectPrinters",
+		"RedirectComPorts",
+		"RedirectSmartcards",
+		"RedirectWebAuthn",
+		"RedirectLocation",
+		"DriveStoreRedirect",
+		"DeviceStoreRedirect",
+		"CameraStoreRedirect",
+		"UsbDeviceStoRedirect",
+	)
+}
+
+// deviceTypes returns the device types the client may redirect to the
+// session. The device types are listed one by one, so that a single type
+// can be denied: the generic device redirection does not imply the camera
+// or the USB devices of the client. The wildcard is only used when every
+// device type is allowed.
+func deviceTypes(policy access.Policy) string {
+	types := []string{}
+
+	if policy.Port {
+		types = append(types, "port")
+	}
+	if policy.SmartCard {
+		types = append(types, "smartcard")
+	}
+	if policy.Usb {
+		types = append(types, "usb")
+	}
+	if policy.Camera {
+		types = append(types, "camera")
+	}
+
+	if len(types) == 0 {
+		return ""
+	}
+
+	if policy.Pnp && policy.Port && policy.SmartCard && policy.Usb && policy.Camera {
+		// every device type is allowed, the wildcard covers the types
+		// that are not known here as well
+		return "*"
+	}
+
+	return strings.Join(types, ",")
+}
+
+// redirectList returns the value of a setting that lists the resources of
+// the client. An empty list disables the redirection.
+func redirectList(enabled bool) string {
+	if enabled {
+		return "*"
+	}
+	return ""
 }
 
 func (rb *Builder) isForced(f *structs.Field) bool {

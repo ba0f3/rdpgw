@@ -33,6 +33,49 @@ Caps:
 
 RDPGW provides multi-factor authentication out of the box with OpenID Connect integration. Configure MFA in your identity provider to enhance security.
 
+## Restricting the login to a group
+
+The gateway can restrict the login to the members of one or more groups. A
+user that is not a member of one of the listed groups is refused with `403
+Forbidden` and no session is created.
+
+```yaml
+OpenId:
+  ProviderUrl: https://<provider_url>
+  ClientId: <your_client_id>
+  ClientSecret: <your_client_secret>
+  # only the members of these groups may log in
+  Groups:
+    - rdpgw-users
+    - admins
+  # the claim that carries the group membership of the user, "groups" by default
+  GroupsClaim: groups
+```
+
+The group membership is read from the ID token. The provider has to put the
+groups of the user in that claim, and the gateway has to ask for the scope
+that makes the provider do so. The scopes are configurable because not every
+provider knows the same scope:
+
+```yaml
+OpenId:
+  # the default is "openid profile email"
+  Scopes:
+    - openid
+    - profile
+    - email
+    - groups
+```
+
+For Keycloak the `groups` scope is available as an optional client scope. Add
+it to the client of the gateway and the group membership shows up in the
+`groups` claim of the ID token. Providers that reject an unknown scope (Azure
+AD for example) must not have the `groups` scope added.
+
+The group membership that the gateway reads is also the group membership that
+the rules of the `access` section match on, see the
+[Access Control Documentation](access-control.md).
+
 ## Provider Examples
 
 ### Keycloak
@@ -66,6 +109,7 @@ OpenId:
 - Configure appropriate scopes and claims in your provider
 - Enable MFA in your identity provider for enhanced security
 - Set appropriate session timeouts in both gateway and provider
+- Restrict the login to a group when the provider supports it
 
 ## Troubleshooting
 

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/access"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/identity"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/transport"
 	"github.com/google/uuid"
@@ -81,6 +82,16 @@ func (g *Gateway) HandleGatewayProtocol(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+
+	// Pin the redirect policy of this session. When the client authenticates
+	// with a gateway access token, the policy that is signed into that
+	// token replaces this one. It is resolved at the moment the .rdp file
+	// was handed out and is therefore bound to the user it was issued for.
+	if t.RedirectFlags == nil {
+		flags := RedirectFlagsFromPolicy(access.Current().PolicyFor(id))
+		t.RedirectFlags = &flags
+	}
+
 	ctx = context.WithValue(ctx, CtxTunnel, t)
 
 	if r.Method == MethodRDGOUT {

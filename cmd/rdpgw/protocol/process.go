@@ -289,8 +289,16 @@ func (p *Processor) tunnelAuthResponse(errorCode int) []byte {
 		p.gw.IdleTimeout = 0
 	}
 
-	binary.Write(buf, binary.LittleEndian, uint32(makeRedirectFlags(p.gw.RedirectFlags))) // redir flags
-	binary.Write(buf, binary.LittleEndian, uint32(p.gw.IdleTimeout))                      // timeout in minutes
+	// The redirect flags of the session take precedence over the default
+	// policy of the gateway. They are the resolved policy of the user and
+	// are therefore enforced by the gateway and not by the client.
+	flags := p.gw.RedirectFlags
+	if p.tunnel.RedirectFlags != nil {
+		flags = *p.tunnel.RedirectFlags
+	}
+
+	binary.Write(buf, binary.LittleEndian, uint32(makeRedirectFlags(flags))) // redir flags
+	binary.Write(buf, binary.LittleEndian, uint32(p.gw.IdleTimeout))         // timeout in minutes
 
 	return createPacket(PKT_TYPE_TUNNEL_AUTH_RESPONSE, buf.Bytes())
 }

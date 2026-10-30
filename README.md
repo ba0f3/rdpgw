@@ -102,6 +102,55 @@ RDPGW supports header-based authentication for integration with reverse proxy se
 
 For detailed configuration and examples, see the [Header Authentication Documentation](docs/header-authentication.md).
 
+## Access control
+
+The gateway enforces an access policy for every user:
+
+* the **redirect policy** restricts the resources of the client that may be
+  redirected into the session (clipboard, drives, printers, serial ports,
+  plug and play devices, smartcards, WebAuthn and location information)
+* the **host ACL** restricts the remote hosts a user may connect to
+* the **group allow-list** restricts who may log in at all
+
+The policy is enforced by the gateway and not by the client. The resolved
+redirect policy is signed into the gateway access token and replayed in the
+tunnel authorization response, the generated `.rdp` file is rewritten to
+match it and the redirect settings can never be overridden through the URL.
+
+The `caps` section holds the global policy, it is the ceiling of the
+deployment. The rules in the `access` section can only narrow it, per user
+or per group:
+
+```yaml
+Caps:
+  EnableClipboard: false
+  EnableDrive: false
+  EnablePrinter: false
+  EnablePort: false
+  EnablePnp: false
+
+Access:
+  Rules:
+    - Name: contractors
+      Groups:
+        - contractors
+      Redirect:
+        EnableDrive: false
+      Hosts:
+        - 10.0.0.10
+```
+
+The lifetime of the gateway credentials in the `.rdp` file is configurable
+with `security.paatokenlifetime`, the lifetime of the browser session with
+`server.sessionlifetime`.
+
+A rule with `deny: true` keeps the matching users out of the gateway
+completely: they cannot log in and cannot reach any host. A rule that
+selects a group applies to the users whose group membership the gateway does
+not know, so that it does not fail open for them.
+
+For the complete description see the [Access Control Documentation](docs/access-control.md).
+
 ## TLS
 
 The gateway requires a valid TLS certificate. This means a certificate that is signed by a valid CA that is in the store 
@@ -195,6 +244,10 @@ Server:
   # if a file store is chosen, it is required to have clients 'keep state' to the rdpgw
   # instance they are connected to.
  SessionStore: cookie
+  # the lifetime of the browser session in seconds. This is the time the user has
+  # to download the rdp file, it is not the lifetime of the gateway credentials
+  # in the rdp file, that one is security.paatokenlifetime
+ # SessionLifetime: 120
   # tries to set the receive / send buffer of the connections to the client
  # in case of high latency high bandwidth the defaults set by the OS might
  # be to low for a good experience
@@ -205,6 +258,20 @@ OpenId:
  ProviderUrl: http://keycloak/auth/realms/test
  ClientId: rdpgw
  ClientSecret: your-secret
+ # only the members of these groups may log in to the gateway. Empty allows
+ # every user the provider authenticates
+ # Groups:
+ #  - rdpgw-users
+ # the claim that carries the group membership of the user, "groups" by default
+ # GroupsClaim: groups
+ # the scopes that are requested from the provider, the default is
+ # "openid profile email". Providers that expose the groups through a scope
+ # (Keycloak for example) need that scope to be added here
+ # Scopes:
+ #  - openid
+ #  - profile
+ #  - email
+ #  - groups
 # Kerberos:
 #  Keytab: /etc/keytabs/rdpgw.keytab
 #  Krb5conf: /etc/krb5.conf
@@ -215,11 +282,46 @@ Caps:
  TokenAuth: true
  # connection timeout in minutes, 0 is limitless
  IdleTimeout: 10
- EnablePrinter: true
- EnablePort: true
- EnablePnp: true
- EnableDrive: true
- EnableClipboard: true
+ # the redirect policy of the gateway. It is the ceiling of the deployment,
+ # the rules in the access section can only narrow it. The resources that
+ # are not enabled here are denied.
+ EnablePrinter: false
+ EnablePort: false
+ EnablePnp: false
+ EnableDrive: false
+ EnableClipboard: false
+ # EnableSmartCard: false
+ # EnableWebAuthn: false
+ # EnableLocation: false
+ # the camera and the USB devices of the client are their own resources,
+ # the device redirection does not imply them
+ # EnableCamera: false
+ # EnableUsb: false
+ # disable every redirection at once, it wins over redirectall
+ # DisableRedirect: false
+ # enable every redirection at once
+ # RedirectAll: false
+# The per user and per group access rules. The rules are evaluated in order
+# and the first rule that matches the user applies.
+Access:
+ # Rules:
+ #  - Name: contractors
+ #    Users:
+ #     - contractor@example.com
+ #    Groups:
+ #     - contractors
+ #    # narrows the redirect policy of the gateway, settings that are not
+ #    # mentioned are inherited
+ #    Redirect:
+ #     EnableClipboard: false
+ #     EnableDrive: false
+ #    # the hosts the matching users may connect to, "*" allows any host
+ #    Hosts:
+ #     - 10.0.0.10
+ #     - 10.0.0.11:3389
+ #    # deny: true keeps the matching users out completely, they cannot
+ #    # log in and cannot reach any host
+ #    Deny: false
 Client:
   # template rdp file to use for clients
   # rdp file settings and their defaults see here: 
@@ -255,6 +357,14 @@ Security:
   # Verifies if the ip used to connect to download the rdp file equals from where the
   # connection is opened.
   VerifyClientIp: true
+  # the lifetime of the gateway access token in minutes. This is the credential
+  # that is embedded in the rdp file, it determines how long a downloaded rdp
+  # file stays usable. The default is 5.
+  # PAATokenLifetime: 5
+  # the lifetime of the user token in minutes, the default is 5
+  # UserTokenLifetime: 5
+  # the lifetime of the host selection query token in minutes, the default is 5
+  # QueryTokenLifetime: 5
 ```
 
 ## How to build & install
@@ -344,6 +454,15 @@ allow-list are rejected with `400 Bad Request`. Authoritative settings
 controlled by the gateway (gateway address, access token, full address,
 username) always win over URL parameters even if an operator adds those
 keys to the allow-list — but adding sensitive keys is still discouraged.
+
+The redirect settings (`redirectclipboard`, `redirectprinters`,
+`drivestoredirect`, `devicestoredirect`, `redirectcomports`,
+`redirectlocation`, `redirectsmartcards`, `redirectwebauthn`,
+`camerastoredirect` and `usbdevicestoredirect`) are controlled by the
+access policy of the gateway. They are rejected with `400 Bad Request` even
+when they are on the allow-list, the policy of the gateway is not something
+a user can change through the URL. See the
+[Access Control Documentation](docs/access-control.md).
 
 ## Integration
 The gateway exposes an endpoint for the verification of user tokens at

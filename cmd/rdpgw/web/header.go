@@ -4,6 +4,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/identity"
@@ -14,6 +15,7 @@ type Header struct {
 	userIdHeader      string
 	emailHeader       string
 	displayNameHeader string
+	groupsHeader      string
 	trustedProxies    []*net.IPNet
 }
 
@@ -22,6 +24,10 @@ type HeaderConfig struct {
 	UserIdHeader      string
 	EmailHeader       string
 	DisplayNameHeader string
+	// GroupsHeader is the header that carries the group membership of the
+	// user. The value is a comma separated list of group names. It is used
+	// by the access policy to apply per group restrictions.
+	GroupsHeader string
 	// TrustedProxies is the CIDR allow-list of upstream proxies that may
 	// stamp the configured user header. The check is applied to the
 	// immediate RemoteAddr of the request — operators must configure their
@@ -47,6 +53,7 @@ func (c *HeaderConfig) New() *Header {
 		userIdHeader:      c.UserIdHeader,
 		emailHeader:       c.EmailHeader,
 		displayNameHeader: c.DisplayNameHeader,
+		groupsHeader:      c.GroupsHeader,
 		trustedProxies:    nets,
 	}
 }
@@ -69,6 +76,21 @@ func (h *Header) remoteIPTrusted(remoteAddr string) bool {
 		}
 	}
 	return false
+}
+
+// splitGroups splits the value of a groups header into the individual
+// group names. The value is a comma separated list.
+func splitGroups(value string) []string {
+	parts := strings.Split(value, ",")
+	groups := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		groups = append(groups, part)
+	}
+	return groups
 }
 
 // Authenticated middleware that extracts user identity from configurable proxy headers
@@ -100,7 +122,6 @@ func (h *Header) Authenticated(next http.Handler) http.Handler {
 
 		// Set identity for downstream processing
 		id.SetUserName(userName)
-		id.SetAuthenticated(true)
 		id.SetAuthTime(time.Now())
 
 		// Set optional user attributes from headers
@@ -121,6 +142,22 @@ func (h *Header) Authenticated(next http.Handler) http.Handler {
 				id.SetDisplayName(displayName)
 			}
 		}
+
+		if h.groupsHeader != "" {
+			if groups := r.Header.Get(h.groupsHeader); groups != "" {
+				id.SetGroups(splitGroups(groups))
+			}
+		}
+
+		// The access policy can refuse the user even when the proxy
+		// authenticated them. The user is not marked as authenticated
+		// before the check, a refused user must not end up with a
+		// session.
+		if refuseDeniedUser(w, id) {
+			return
+		}
+
+		id.SetAuthenticated(true)
 
 		// Save the session identity
 		if err := SaveSessionIdentity(r, w, id); err != nil {

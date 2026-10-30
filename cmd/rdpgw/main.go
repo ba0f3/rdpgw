@@ -14,6 +14,7 @@ import (
 	"github.com/bolkedebruin/gokrb5/v8/keytab"
 	"github.com/bolkedebruin/gokrb5/v8/service"
 	"github.com/bolkedebruin/gokrb5/v8/spnego"
+	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/access"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/config"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/kdcproxy"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/protocol"
@@ -58,7 +59,7 @@ func initOIDC(callbackUrl *url.URL) *web.OIDC {
 		ClientSecret: conf.OpenId.ClientSecret,
 		RedirectURL:  callbackUrl.String(),
 		Endpoint:     provider.Endpoint(),
-		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
+		Scopes:       oidcScopes(),
 	}
 	security.OIDCProvider = provider
 	security.Oauth2Config = oauthConfig
@@ -66,9 +67,23 @@ func initOIDC(callbackUrl *url.URL) *web.OIDC {
 	o := web.OIDCConfig{
 		OAuth2Config:      &oauthConfig,
 		OIDCTokenVerifier: verifier,
+		AllowedGroups:     conf.OpenId.Groups,
+		GroupsClaim:       conf.OpenId.GroupsClaim,
 	}
 
 	return o.New()
+}
+
+// oidcScopes returns the scopes that are requested from the OpenID Connect
+// provider. The default is the set of scopes the gateway has always
+// requested. Operators that need the group membership of the user have to
+// add the scope their provider uses for it.
+func oidcScopes() []string {
+	if len(conf.OpenId.Scopes) > 0 {
+		return conf.OpenId.Scopes
+	}
+
+	return []string{oidc.ScopeOpenID, "profile", "email"}
 }
 
 func main() {
@@ -98,12 +113,24 @@ func main() {
 	security.QuerySigningKey = []byte(conf.Security.QueryTokenSigningKey)
 	security.HostSelection = conf.Server.HostSelection
 	security.Hosts = conf.Server.Hosts
+	security.PAATokenLifetime = conf.Security.PAATokenLifetime
+	security.UserTokenLifetime = conf.Security.UserTokenLifetime
+	security.QueryTokenLifetime = conf.Security.QueryTokenLifetime
+
+	// set up the access policy. The capabilities of the gateway are the
+	// ceiling of the policy, the rules can only narrow it.
+	rules, err := conf.Access.AccessRules()
+	if err != nil {
+		log.Fatalf("Cannot load the access policy: %s", err)
+	}
+	access.Init(access.NewEngine(conf.Caps.DefaultPolicy(), rules))
 
 	// init session store
 	web.InitStore([]byte(conf.Server.SessionKey),
 		[]byte(conf.Server.SessionEncryptionKey),
 		conf.Server.SessionStore,
 		conf.Server.MaxSessionLength,
+		conf.Server.SessionLifetime,
 	)
 
 	web.InitTrustedProxies(conf.Server.TrustedProxies)
@@ -265,6 +292,7 @@ func main() {
 			UserIdHeader:      conf.Header.UserIdHeader,
 			EmailHeader:       conf.Header.EmailHeader,
 			DisplayNameHeader: conf.Header.DisplayNameHeader,
+			GroupsHeader:      conf.Header.GroupsHeader,
 			TrustedProxies:    conf.Header.TrustedProxies,
 		}
 		headerAuth := headerConfig.New()

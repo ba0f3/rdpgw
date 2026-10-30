@@ -13,7 +13,7 @@ func init() {
 	// Initialize session store for testing
 	sessionKey := []byte("thisisasessionkeyreplacethisjetzt")
 	encryptionKey := []byte("thisisasessionencryptionkey12345")
-	InitStore(sessionKey, encryptionKey, "cookie", 8192)
+	InitStore(sessionKey, encryptionKey, "cookie", 8192, 120)
 }
 
 func TestHeaderAuthenticated(t *testing.T) {

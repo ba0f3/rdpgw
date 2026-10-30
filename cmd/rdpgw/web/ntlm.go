@@ -42,8 +42,19 @@ func (h *NTLMAuthHandler) NTLMAuth(next http.HandlerFunc) http.HandlerFunc {
 			log.Printf("NTLM: User %s authenticated", username)
 			id := identity.FromRequestCtx(r)
 			id.SetUserName(username)
-			id.SetAuthenticated(true)
 			id.SetAuthTime(time.Now())
+			// the group membership of a previous login does not apply to
+			// this user
+			id.SetGroups(nil)
+
+			// the access policy can refuse the user even when the
+			// authentication provider accepted the credentials
+			if refuseDeniedUser(w, id) {
+				return
+			}
+
+			id.SetAuthenticated(true)
+
 			next.ServeHTTP(w, identity.AddToRequestCtx(id, r))
 		}
         }

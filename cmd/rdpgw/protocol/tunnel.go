@@ -29,6 +29,12 @@ type Tunnel struct {
 	RemoteAddr string
 	// User
 	User identity.Identity
+	// RedirectFlags is the redirect policy that applies to this session.
+	// It is resolved from the identity of the user or, when the client
+	// authenticates with a gateway access token, from the policy that is
+	// signed into that token. A nil value means the default policy of the
+	// gateway applies.
+	RedirectFlags *RedirectFlags
 
 	// rwc is the underlying connection to the remote desktop server.
 	// It is of the type *net.TCPConn

@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http/httptest"
+	"reflect"
 	"testing"
 )
 
@@ -51,11 +52,119 @@ func TestFindUserNameInClaims(t *testing.T) {
 	}
 }
 
+func TestFindGroupsInClaims(t *testing.T) {
+	cases := []struct {
+		name  string
+		data  map[string]interface{}
+		claim string
+		want  []string
+	}{
+		{
+			name: "list of groups",
+			data: map[string]interface{}{
+				"groups": []interface{}{"admins", "staff"},
+			},
+			claim: "groups",
+			want:  []string{"admins", "staff"},
+		},
+		{
+			name: "single group",
+			data: map[string]interface{}{
+				"groups": "admins",
+			},
+			claim: "groups",
+			want:  []string{"admins"},
+		},
+		{
+			name: "custom claim",
+			data: map[string]interface{}{
+				"roles": []interface{}{"admins"},
+			},
+			claim: "roles",
+			want:  []string{"admins"},
+		},
+		{
+			name: "missing claim",
+			data: map[string]interface{}{
+				"preferred_username": "alice",
+			},
+			claim: "groups",
+			want:  nil,
+		},
+		{
+			name: "unexpected type",
+			data: map[string]interface{}{
+				"groups": 42,
+			},
+			claim: "groups",
+			want:  nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := findGroupsInClaims(tc.data, tc.claim)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("expected groups: %v, got: %v", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestOIDCGroupAllowed(t *testing.T) {
+	cases := []struct {
+		name          string
+		allowedGroups []string
+		groups        []string
+		want          bool
+	}{
+		{
+			name:          "no allow list allows every user",
+			allowedGroups: nil,
+			groups:        []string{"some-group"},
+			want:          true,
+		},
+		{
+			name:          "member of an allowed group",
+			allowedGroups: []string{"rdpgw-users", "admins"},
+			groups:        []string{"admins", "other"},
+			want:          true,
+		},
+		{
+			name:          "member of no allowed group",
+			allowedGroups: []string{"rdpgw-users"},
+			groups:        []string{"other"},
+			want:          false,
+		},
+		{
+			name:          "user without any group",
+			allowedGroups: []string{"rdpgw-users"},
+			groups:        nil,
+			want:          false,
+		},
+		{
+			name:          "the comparison is case insensitive",
+			allowedGroups: []string{"RDPGW-Users"},
+			groups:        []string{"rdpgw-users"},
+			want:          true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			o := &OIDC{allowedGroups: tc.allowedGroups, groupsClaim: "groups"}
+			if got := o.groupAllowed(tc.groups); got != tc.want {
+				t.Fatalf("groupAllowed(%v) = %v, want %v", tc.groups, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestOIDCStateManagement(t *testing.T) {
 	// Initialize session store for testing
 	sessionKey := []byte("testsessionkeytestsessionkey1234")  // 32 bytes
 	encryptionKey := []byte("testencryptionkeytestencrypt1234")  // 32 bytes
-	InitStore(sessionKey, encryptionKey, "cookie", 8192)
+	InitStore(sessionKey, encryptionKey, "cookie", 8192, 120)
 
 	// Test storing and retrieving OIDC state
 	t.Run("StoreAndRetrieveState", func(t *testing.T) {

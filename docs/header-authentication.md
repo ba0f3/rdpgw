@@ -15,6 +15,7 @@ Header:
   UserIdHeader: "X-Forwarded-User-Id"   # Optional: User ID header
   EmailHeader: "X-Forwarded-Email"      # Optional: Email header
   DisplayNameHeader: "X-Forwarded-Name" # Optional: Display name header
+  GroupsHeader: "X-Forwarded-Groups"    # Optional: comma separated groups
   # Required: CIDR allow-list of upstream proxies that may stamp the
   # headers above. Requests arriving from any other RemoteAddr are
   # refused with 401, so the user header cannot be minted by callers
@@ -28,6 +29,18 @@ Caps:
 Security:
   VerifyClientIp: false  # Requests come through proxy
 ```
+
+The value of the groups header is a comma separated list of group names.
+The groups are used by the rules of the `Access` section, see the
+[Access Control Documentation](access-control.md). The proxy must strip
+inbound copies of the headers it stamps, the gateway only looks at the
+values of the request it receives.
+
+The proxy has to overwrite `X-Forwarded-For` with the address of the client
+and not append to it. The gateway ignores a header with more than one
+address: a client that prepends an address to it produces the same chain as
+a proxy that appends to it, so the gateway cannot tell which part of the
+chain the proxy wrote.
 
 ## Proxy Service Examples
 
@@ -207,7 +220,11 @@ server {
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # Overwrite the header with the address of the client. Do not append
+        # to a header the client could have supplied itself: the gateway
+        # only trusts a header with a single address and binds the
+        # credentials of a session to the address of the client.
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
 
         # Timeouts for long-lived connections

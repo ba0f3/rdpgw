@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/access"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/identity"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/protocol"
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -27,12 +28,39 @@ var (
 	Oauth2Config      oauth2.Config
 )
 
-var ExpiryTime time.Duration = 5
+// The lifetimes of the credentials the gateway hands out. They are set from
+// the configuration during startup and are expressed in minutes.
+var (
+	// PAATokenLifetime is the lifetime of the gateway access token in
+	// minutes. This is the credential that is embedded in the .rdp file, it
+	// determines how long a downloaded .rdp file stays usable.
+	PAATokenLifetime = 5
+
+	// UserTokenLifetime is the lifetime of the user token in minutes.
+	UserTokenLifetime = 5
+
+	// QueryTokenLifetime is the lifetime of the token that carries the
+	// host selection of a signed query in minutes.
+	QueryTokenLifetime = 5
+)
+
 var VerifyClientIP bool = true
 
 type customClaims struct {
 	RemoteServer string `json:"remoteServer"`
 	ClientIP     string `json:"clientIp"`
+	// User is the name of the user the token was issued for. It is the
+	// complete name, the subject of the token can be the name without the
+	// domain.
+	User string `json:"user,omitempty"`
+	// Groups is the group membership of the user. The access policy
+	// matches on it, it restores the membership that was resolved when
+	// the .rdp file was handed out.
+	Groups []string `json:"groups,omitempty"`
+	// Redirect is the redirect policy that applies to the session. It is
+	// signed into the token so that the gateway enforces the policy that
+	// was applied when the .rdp file was handed out.
+	Redirect *access.Policy `json:"redirect,omitempty"`
 }
 
 func CheckSession(next protocol.CheckHostFunc) protocol.CheckHostFunc {
@@ -106,7 +134,31 @@ func CheckPAACookie(ctx context.Context, tokenString string) (bool, error) {
 
 	tunnel.TargetServer = custom.RemoteServer
 	tunnel.RemoteAddr = custom.ClientIP
-	tunnel.User.SetUserName(standard.Subject)
+
+	// The identity of the session is restored from the token. The complete
+	// user name and the group membership are needed to apply the access
+	// policy of the gateway to the session.
+	userName := custom.User
+	if userName == "" {
+		userName = standard.Subject
+	}
+	tunnel.User.SetUserName(userName)
+	tunnel.User.SetGroups(custom.Groups)
+
+	// The redirect policy of the session is signed into the token. It is
+	// the policy that was resolved for the user when the .rdp file was
+	// handed out, so the client cannot widen it. The policy of the gateway
+	// is the ceiling: a token that was issued under a looser policy does
+	// not widen the policy that is configured now.
+	policy := access.Policy{DisableAll: true}
+	if custom.Redirect != nil {
+		policy = *custom.Redirect
+	}
+
+	policy = policy.Narrow(access.Current().PolicyFor(tunnel.User))
+
+	flags := protocol.RedirectFlagsFromPolicy(policy)
+	tunnel.RedirectFlags = &flags
 
 	return true, nil
 }
@@ -124,14 +176,34 @@ func GeneratePAAToken(ctx context.Context, username string, server string) (stri
 	standard := jwt.Claims{
 		Issuer:   "rdpgw",
 		Audience: jwt.Audience{paaAudience},
-		Expiry:   jwt.NewNumericDate(time.Now().Add(time.Minute * 5)),
+		Expiry:   jwt.NewNumericDate(time.Now().Add(time.Minute * time.Duration(PAATokenLifetime))),
 		Subject:  username,
 	}
 
 	id := identity.FromCtx(ctx)
+
+	clientIP := ""
+	if id != nil {
+		if ip, ok := id.GetAttribute(identity.AttrClientIp).(string); ok {
+			clientIP = ip
+		}
+	}
+
+	// The redirect policy of the user is signed into the token. The
+	// gateway replays it in the tunnel authorization response which makes
+	// the restriction a policy of the gateway instead of a setting of the
+	// client.
+	policy := access.Current().PolicyFor(id)
+
 	private := customClaims{
 		RemoteServer: server,
-		ClientIP:     id.GetAttribute(identity.AttrClientIp).(string),
+		ClientIP:     clientIP,
+		Redirect:     &policy,
+	}
+
+	if id != nil {
+		private.User = id.UserName()
+		private.Groups = id.Groups()
 	}
 
 	if token, err := jwt.Signed(sig).Claims(standard).Claims(private).Serialize(); err != nil {
@@ -149,7 +221,7 @@ func GenerateUserToken(ctx context.Context, userName string) (string, error) {
 
 	claims := jwt.Claims{
 		Subject: userName,
-		Expiry:  jwt.NewNumericDate(time.Now().Add(time.Minute * 5)),
+		Expiry:  jwt.NewNumericDate(time.Now().Add(time.Minute * time.Duration(UserTokenLifetime))),
 		Issuer:  "rdpgw",
 	}
 
@@ -266,7 +338,7 @@ func GenerateQueryToken(ctx context.Context, query string, issuer string) (strin
 
 	claims := jwt.Claims{
 		Subject: query,
-		Expiry:  jwt.NewNumericDate(time.Now().Add(time.Minute * 5)),
+		Expiry:  jwt.NewNumericDate(time.Now().Add(time.Minute * time.Duration(QueryTokenLifetime))),
 		Issuer:  issuer,
 	}
 

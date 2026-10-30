@@ -30,13 +30,22 @@ func InitTrustedProxies(cidrs []string) {
 	trustedProxyNets = nets
 }
 
+// remoteIsTrustedProxy reports whether the request arrived from one of the
+// trusted proxies.
 func remoteIsTrustedProxy(remoteAddr string) bool {
-	if len(trustedProxyNets) == 0 {
-		return false
-	}
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
 		host = remoteAddr
+	}
+
+	return ipIsTrustedProxy(host)
+}
+
+// ipIsTrustedProxy reports whether the address is in the allow-list of the
+// trusted proxies.
+func ipIsTrustedProxy(host string) bool {
+	if len(trustedProxyNets) == 0 {
+		return false
 	}
 	ip := net.ParseIP(host)
 	if ip == nil {
@@ -84,9 +93,24 @@ func EnrichContext(next http.Handler) http.Handler {
 				for i := range ips {
 					ips[i] = strings.TrimSpace(ips[i])
 				}
-				clientIp = ips[0]
-				if len(ips) > 1 {
-					proxies = ips[1:]
+
+				// The header is only trusted when it holds exactly one
+				// address: the trusted proxy has to overwrite it with
+				// the address of the client. A chain with more than one
+				// address cannot be attributed to the proxy, a client
+				// that prepends an address to it produces the same chain
+				// as a proxy that appends. Accepting the right most
+				// address of such a chain would let the client pick the
+				// address the gateway binds the credentials of the
+				// session to.
+				switch len(ips) {
+				case 0:
+				case 1:
+					clientIp = ips[0]
+				default:
+					log.Printf("Ignoring X-Forwarded-For with %d addresses: the trusted proxy has to overwrite it with the address of the client",
+						len(ips))
+					proxies = ips
 				}
 			}
 		}
@@ -103,9 +127,20 @@ func TransposeSPNEGOContext(next http.Handler) http.Handler {
 		if gid != nil {
 			id := identity.FromRequestCtx(r)
 			id.SetUserName(gid.UserName())
-			id.SetAuthenticated(gid.Authenticated())
 			id.SetDomain(gid.Domain())
 			id.SetAuthTime(gid.AuthTime())
+			// the group membership of a previous login does not apply to
+			// this user
+			id.SetGroups(nil)
+
+			// the access policy can refuse the user even when the
+			// authentication provider accepted the credentials
+			if refuseDeniedUser(w, id) {
+				return
+			}
+
+			id.SetAuthenticated(gid.Authenticated())
+
 			r = identity.AddToRequestCtx(id, r)
 		}
 		next.ServeHTTP(w, r)
