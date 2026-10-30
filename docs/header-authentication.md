@@ -36,6 +36,12 @@ The groups are used by the rules of the `Access` section, see the
 inbound copies of the headers it stamps, the gateway only looks at the
 values of the request it receives.
 
+The proxy has to overwrite `X-Forwarded-For` with the address of the client
+and not append to it. The gateway ignores a header with more than one
+address: a client that prepends an address to it produces the same chain as
+a proxy that appends to it, so the gateway cannot tell which part of the
+chain the proxy wrote.
+
 ## Proxy Service Examples
 
 ### Microsoft Azure Application Proxy
@@ -214,8 +220,9 @@ server {
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        # Set the address of the client, do not append to a header the
-        # client could have supplied itself. The gateway binds the
+        # Overwrite the header with the address of the client. Do not append
+        # to a header the client could have supplied itself: the gateway
+        # only trusts a header with a single address and binds the
         # credentials of a session to the address of the client.
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;

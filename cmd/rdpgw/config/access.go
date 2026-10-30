@@ -22,6 +22,8 @@ func (c RDGCapsConfig) DefaultPolicy() access.Policy {
 		SmartCard: c.EnableSmartCard,
 		WebAuthn:  c.EnableWebAuthn,
 		Location:  c.EnableLocation,
+		Camera:    c.EnableCamera,
+		Usb:       c.EnableUsb,
 	}
 
 	if c.DisableRedirect {
@@ -38,6 +40,8 @@ func (c RDGCapsConfig) DefaultPolicy() access.Policy {
 			SmartCard: true,
 			WebAuthn:  true,
 			Location:  true,
+			Camera:    true,
+			Usb:       true,
 			EnableAll: true,
 		}
 	}
@@ -73,6 +77,8 @@ func (c AccessConfig) AccessRules() ([]access.Rule, error) {
 				SmartCard: rule.Redirect.EnableSmartCard,
 				WebAuthn:  rule.Redirect.EnableWebAuthn,
 				Location:  rule.Redirect.EnableLocation,
+				Camera:    rule.Redirect.EnableCamera,
+				Usb:       rule.Redirect.EnableUsb,
 			}
 		}
 

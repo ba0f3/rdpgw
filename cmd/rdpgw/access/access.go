@@ -3,15 +3,15 @@
 // The policy answers two questions for every authenticated user:
 //
 //   - which client side resources (clipboard, drives, printers, serial
-//     ports, plug and play devices, ...) may be redirected into the remote
-//     session
+//     ports, plug and play devices, cameras, USB devices, ...) may be
+//     redirected into the remote session
 //   - which remote hosts the user may connect to
 //
 // The policy is enforced by the gateway itself and not by the client. The
 // resolved redirect policy is signed into the gateway access token and
-// replayed in the tunnel authorization response, the generated .rdp file is
-// rewritten to match it and the redirect settings can never be overridden
-// through the URL.
+// replayed in the tunnel authorization response, the generated .rdp file
+// is rewritten to match it and the redirect settings can never be
+// overridden through the URL.
 //
 // The default policy is the ceiling: a rule can only narrow it, never widen
 // it. That keeps the global configuration in control of what is possible in
@@ -41,6 +41,8 @@ type Policy struct {
 	SmartCard bool `json:"smartcard"`
 	WebAuthn  bool `json:"webauthn"`
 	Location  bool `json:"location"`
+	Camera    bool `json:"camera"`
+	Usb       bool `json:"usb"`
 
 	// DisableAll forces the client to disable every redirection. It is only
 	// used for the global default policy; a rule that narrows the policy
@@ -71,6 +73,8 @@ func (p Policy) Narrow(other Policy) Policy {
 		SmartCard: p.SmartCard && other.SmartCard,
 		WebAuthn:  p.WebAuthn && other.WebAuthn,
 		Location:  p.Location && other.Location,
+		Camera:    p.Camera && other.Camera,
+		Usb:       p.Usb && other.Usb,
 	}
 
 	if p.EnableAll && other.EnableAll {
@@ -91,6 +95,8 @@ type Overrides struct {
 	SmartCard *bool `json:"smartcard,omitempty"`
 	WebAuthn  *bool `json:"webauthn,omitempty"`
 	Location  *bool `json:"location,omitempty"`
+	Camera    *bool `json:"camera,omitempty"`
+	Usb       *bool `json:"usb,omitempty"`
 }
 
 // Rule narrows the access policy for the users or groups it matches.
@@ -114,8 +120,9 @@ type Rule struct {
 	Hosts []string
 
 	// Deny refuses the matching users access to the gateway. It is the
-	// way to keep a user or a group out completely: the redirect policy of
-	// a denied user is empty and none of the hosts are reachable.
+	// way to keep a user or a group out completely: the user cannot log
+	// in, the redirect policy of a denied user is empty and none of the
+	// hosts are reachable.
 	Deny bool
 }
 
@@ -162,6 +169,8 @@ func (e *Engine) PolicyFor(id identity.Identity) Policy {
 	policy.SmartCard = narrow(policy.SmartCard, rule.Redirect.SmartCard)
 	policy.WebAuthn = narrow(policy.WebAuthn, rule.Redirect.WebAuthn)
 	policy.Location = narrow(policy.Location, rule.Redirect.Location)
+	policy.Camera = narrow(policy.Camera, rule.Redirect.Camera)
+	policy.Usb = narrow(policy.Usb, rule.Redirect.Usb)
 
 	return policy
 }
@@ -175,8 +184,9 @@ func narrow(defaultValue bool, override *bool) bool {
 	return defaultValue && *override
 }
 
-// RuleFor returns the first rule that matches the identity. Rules are
-// evaluated in order and the first match wins.
+// RuleFor returns the rule that applies to the identity. A rule that denies
+// the user wins over every other rule, the first rule that matches the
+// user applies otherwise.
 func (e *Engine) RuleFor(id identity.Identity) *Rule {
 	if id == nil {
 		return nil
@@ -184,6 +194,12 @@ func (e *Engine) RuleFor(id identity.Identity) *Rule {
 
 	user := id.UserName()
 	groups := id.Groups()
+
+	for i := range e.rules {
+		if e.rules[i].Deny && e.rules[i].matches(user, groups) {
+			return &e.rules[i]
+		}
+	}
 
 	for i := range e.rules {
 		if e.rules[i].matches(user, groups) {
@@ -194,8 +210,21 @@ func (e *Engine) RuleFor(id identity.Identity) *Rule {
 	return nil
 }
 
+// Denied reports whether the access policy refuses the user. A denied user
+// cannot log in and cannot reach any host.
+func (e *Engine) Denied(id identity.Identity) bool {
+	rule := e.RuleFor(id)
+	return rule != nil && rule.Deny
+}
+
 // matches reports whether the rule applies to the user or to one of the
 // groups the user is a member of.
+//
+// A rule that selects a group also applies to the users whose group
+// membership the gateway does not know: the gateway cannot tell whether
+// they are a member of the group, and a rule that selects a group must not
+// fail open for them. A rule that selects a user by name needs no group
+// membership and is not affected.
 func (r *Rule) matches(user string, groups []string) bool {
 	for _, u := range r.Users {
 		u = strings.TrimSpace(u)
@@ -205,6 +234,15 @@ func (r *Rule) matches(user string, groups []string) bool {
 		if strings.EqualFold(u, user) {
 			return true
 		}
+	}
+
+	if len(r.Groups) == 0 {
+		return false
+	}
+
+	if len(groups) == 0 {
+		// The group membership is unknown.
+		return len(r.Users) == 0
 	}
 
 	for _, g := range r.Groups {

@@ -94,24 +94,23 @@ func EnrichContext(next http.Handler) http.Handler {
 					ips[i] = strings.TrimSpace(ips[i])
 				}
 
-				// The chain is ordered from the client to the proxies:
-				// the addresses on the right are the ones the trusted
-				// proxies appended and are more trustworthy than the ones
-				// a client could have supplied itself. The client address
-				// is therefore the right most address that is not a
-				// trusted proxy. Taking the first one would let a client
-				// spoof the address the gateway binds the credentials of
-				// the session to.
-				for i := len(ips) - 1; i >= 0; i-- {
-					if ips[i] == "" {
-						continue
-					}
-					if ipIsTrustedProxy(ips[i]) {
-						continue
-					}
-					clientIp = ips[i]
-					proxies = ips[i+1:]
-					break
+				// The header is only trusted when it holds exactly one
+				// address: the trusted proxy has to overwrite it with
+				// the address of the client. A chain with more than one
+				// address cannot be attributed to the proxy, a client
+				// that prepends an address to it produces the same chain
+				// as a proxy that appends. Accepting the right most
+				// address of such a chain would let the client pick the
+				// address the gateway binds the credentials of the
+				// session to.
+				switch len(ips) {
+				case 0:
+				case 1:
+					clientIp = ips[0]
+				default:
+					log.Printf("Ignoring X-Forwarded-For with %d addresses: the trusted proxy has to overwrite it with the address of the client",
+						len(ips))
+					proxies = ips
 				}
 			}
 		}
@@ -128,12 +127,20 @@ func TransposeSPNEGOContext(next http.Handler) http.Handler {
 		if gid != nil {
 			id := identity.FromRequestCtx(r)
 			id.SetUserName(gid.UserName())
-			id.SetAuthenticated(gid.Authenticated())
 			id.SetDomain(gid.Domain())
 			id.SetAuthTime(gid.AuthTime())
 			// the group membership of a previous login does not apply to
 			// this user
 			id.SetGroups(nil)
+
+			// the access policy can refuse the user even when the
+			// authentication provider accepted the credentials
+			if refuseDeniedUser(w, id) {
+				return
+			}
+
+			id.SetAuthenticated(gid.Authenticated())
+
 			r = identity.AddToRequestCtx(id, r)
 		}
 		next.ServeHTTP(w, r)

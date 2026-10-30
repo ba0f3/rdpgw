@@ -144,6 +144,11 @@ The lifetime of the gateway credentials in the `.rdp` file is configurable
 with `security.paatokenlifetime`, the lifetime of the browser session with
 `server.sessionlifetime`.
 
+A rule with `deny: true` keeps the matching users out of the gateway
+completely: they cannot log in and cannot reach any host. A rule that
+selects a group applies to the users whose group membership the gateway does
+not know, so that it does not fail open for them.
+
 For the complete description see the [Access Control Documentation](docs/access-control.md).
 
 ## TLS
@@ -288,6 +293,10 @@ Caps:
  # EnableSmartCard: false
  # EnableWebAuthn: false
  # EnableLocation: false
+ # the camera and the USB devices of the client are their own resources,
+ # the device redirection does not imply them
+ # EnableCamera: false
+ # EnableUsb: false
  # disable every redirection at once, it wins over redirectall
  # DisableRedirect: false
  # enable every redirection at once
@@ -310,6 +319,9 @@ Access:
  #    Hosts:
  #     - 10.0.0.10
  #     - 10.0.0.11:3389
+ #    # deny: true keeps the matching users out completely, they cannot
+ #    # log in and cannot reach any host
+ #    Deny: false
 Client:
   # template rdp file to use for clients
   # rdp file settings and their defaults see here: 

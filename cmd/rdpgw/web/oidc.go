@@ -164,10 +164,18 @@ func (h *OIDC) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id.SetUserName(userName)
-	id.SetAuthenticated(true)
-	id.SetAuthTime(time.Now())
 	id.SetGroups(groups)
 	id.SetAttribute(identity.AttrAccessToken, oauth2Token.AccessToken)
+
+	// The access policy can refuse the user even when the provider
+	// authenticated them. The user is not marked as authenticated before
+	// the check, a refused user must not end up with a session.
+	if refuseDeniedUser(w, id) {
+		return
+	}
+
+	id.SetAuthenticated(true)
+	id.SetAuthTime(time.Now())
 
 	if err := SaveSessionIdentity(r, w, id); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

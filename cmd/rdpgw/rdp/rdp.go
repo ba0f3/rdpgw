@@ -257,9 +257,9 @@ func (rb *Builder) ApplyRedirectPolicy(policy access.Policy) {
 	rb.Settings.RedirectWebAuthn = policy.WebAuthn
 	rb.Settings.RedirectLocation = policy.Location
 	rb.Settings.DriveStoreRedirect = redirectList(policy.Drive)
-	rb.Settings.DeviceStoreRedirect = redirectList(policy.Pnp)
-	rb.Settings.CameraStoreRedirect = redirectList(policy.Pnp)
-	rb.Settings.UsbDeviceStoRedirect = redirectList(policy.Pnp)
+	rb.Settings.DeviceStoreRedirect = deviceTypes(policy)
+	rb.Settings.CameraStoreRedirect = redirectList(policy.Camera)
+	rb.Settings.UsbDeviceStoRedirect = redirectList(policy.Usb)
 
 	rb.Force(
 		"RedirectClipboard",
@@ -273,6 +273,40 @@ func (rb *Builder) ApplyRedirectPolicy(policy access.Policy) {
 		"CameraStoreRedirect",
 		"UsbDeviceStoRedirect",
 	)
+}
+
+// deviceTypes returns the device types the client may redirect to the
+// session. The device types are listed one by one, so that a single type
+// can be denied: the generic device redirection does not imply the camera
+// or the USB devices of the client. The wildcard is only used when every
+// device type is allowed.
+func deviceTypes(policy access.Policy) string {
+	types := []string{}
+
+	if policy.Port {
+		types = append(types, "port")
+	}
+	if policy.SmartCard {
+		types = append(types, "smartcard")
+	}
+	if policy.Usb {
+		types = append(types, "usb")
+	}
+	if policy.Camera {
+		types = append(types, "camera")
+	}
+
+	if len(types) == 0 {
+		return ""
+	}
+
+	if policy.Pnp && policy.Port && policy.SmartCard && policy.Usb && policy.Camera {
+		// every device type is allowed, the wildcard covers the types
+		// that are not known here as well
+		return "*"
+	}
+
+	return strings.Join(types, ",")
 }
 
 // redirectList returns the value of a setting that lists the resources of

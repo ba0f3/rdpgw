@@ -33,6 +33,50 @@ matters for your deployment. The signature does not cover
 `redirectlocation`, `redirectwebauthn`, `camerastoredirect` and
 `usbdevicestoredirect`, keep those in mind.
 
+### `X-Forwarded-For` has to be overwritten by the proxy
+
+The gateway only trusts a `X-Forwarded-For` header that holds exactly one
+address. A chain with more than one address is ignored, because a client
+that prepends an address to the header produces the same chain as a proxy
+that appends to it: the gateway cannot tell which part of the chain the
+proxy wrote.
+
+The proxy has to overwrite the header with the address of the client:
+
+```nginx
+proxy_set_header X-Forwarded-For $remote_addr;
+```
+
+`$proxy_add_x_forwarded_for` appends to a header the client could have
+supplied, the gateway ignores the result of it and falls back to the
+address of the socket peer. List the addresses of the proxies in
+`Server.TrustedProxies`, not a range that contains the clients as well.
+
+### The device redirection of the client is listed per device type
+
+The camera and the USB devices of the client are their own resources now:
+`Caps.EnableCamera` and `Caps.EnableUsb` allow them, the device
+redirection (`Caps.EnablePnp`) does not imply them. The `devicestoredirect`
+setting of the `.rdp` file lists the device types that are allowed
+(`port`, `smartcard`, `usb`, `camera`).
+
+Operators that had `Caps.EnablePnp: true` and want the devices of the
+client to be redirected have to enable the types they need.
+
+### A rule that selects a group does not fail open
+
+A rule that selects a group also applies to the users whose group
+membership the gateway does not know (the authentication methods that
+cannot deliver a group membership, and the users whose provider did not
+send the groups claim). The gateway cannot tell whether they are a member
+of the group, and a rule that selects a group must not fail open for them.
+
+### A rule with `deny: true` denies the login
+
+A rule with `deny: true` refused the hosts of a user before, the user
+could still log in and download an `.rdp` file. The rule refuses the login
+now, in every authentication method.
+
 ### The lifetime of the credentials is configurable
 
 The gateway access token that is embedded in the `.rdp` file expires after

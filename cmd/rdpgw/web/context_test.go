@@ -43,33 +43,43 @@ func TestEnrichContextXForwardedForRequiresTrustedProxy(t *testing.T) {
 			wantClientIp:   "198.51.100.7",
 		},
 		{
-			name:           "trusted remote with XFF honors first XFF entry",
+			name:           "trusted remote with a single XFF entry uses it",
+			trustedProxies: []string{"10.0.0.0/8"},
+			remoteAddr:     "10.1.2.3:5678",
+			xff:            "203.0.113.42",
+			wantClientIp:   "203.0.113.42",
+		},
+		{
+			// A chain with more than one address cannot be attributed
+			// to the proxy: a client that prepends an address produces
+			// the same chain as a proxy that appends. The proxy has to
+			// overwrite the header, the gateway falls back to the
+			// address of the socket peer otherwise.
+			name:           "a chain with more than one address is ignored",
 			trustedProxies: []string{"10.0.0.0/8"},
 			remoteAddr:     "10.1.2.3:5678",
 			xff:            "203.0.113.42, 10.99.0.1",
-			wantClientIp:   "203.0.113.42",
+			wantClientIp:   "10.1.2.3",
 		},
 		{
 			// The client supplied the first entry itself, the trusted
 			// proxy appended the address it saw. The address of the
-			// client is the one the proxy appended, taking the first
-			// entry would let the client pick the address the gateway
-			// binds the credentials of the session to.
+			// client is not attributable, the header is ignored.
 			name:           "spoofed prefix does not win over the appended address",
 			trustedProxies: []string{"10.0.0.0/8"},
 			remoteAddr:     "10.1.2.3:5678",
 			xff:            "198.51.100.9, 203.0.113.42",
-			wantClientIp:   "203.0.113.42",
+			wantClientIp:   "10.1.2.3",
 		},
 		{
 			// The client spoofed the address of another client and put
 			// the address of the proxy behind it, the address of the
-			// client is the one the proxy appended.
+			// client is not attributable, the header is ignored.
 			name:           "spoofed client address does not win",
 			trustedProxies: []string{"10.0.0.0/8"},
 			remoteAddr:     "10.1.2.3:5678",
 			xff:            "203.0.113.42, 198.51.100.9",
-			wantClientIp:   "198.51.100.9",
+			wantClientIp:   "10.1.2.3",
 		},
 		{
 			name:           "trusted remote without XFF uses RemoteAddr",

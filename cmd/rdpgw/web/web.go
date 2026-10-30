@@ -570,6 +570,11 @@ func (h *Handler) HandleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The access policy can refuse the user.
+	if refuseDeniedUser(w, id) {
+		return
+	}
+
 	// determine host to connect to
 	host, err := h.getHost(ctx, r.URL)
 	if err != nil {
@@ -719,6 +724,11 @@ func (h *Handler) HandleHostList(w http.ResponseWriter, r *http.Request) {
 
 	if !id.Authenticated() {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// The access policy can refuse the user.
+	if refuseDeniedUser(w, id) {
 		return
 	}
 

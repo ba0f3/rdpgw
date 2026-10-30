@@ -47,13 +47,27 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `Client.RdpOverridableKeys`. See [UPGRADING.md](UPGRADING.md).
 - The `.rdp` file now always carries the redirect settings of the policy,
   even when they carry the value the client uses by default.
-- `X-Forwarded-For` is now evaluated from the right: the client address is
-  the right most address of the chain that is not a trusted proxy. Taking
-  the first address of the chain let a client supply the address the
-  gateway binds the credentials of a session to, which made a stolen
-  `.rdp` file usable from another network behind a proxy. Proxies that
-  forward the header should set it to the address they see
-  (`proxy_set_header X-Forwarded-For $remote_addr;` in nginx).
+- `X-Forwarded-For` is only honored when it holds exactly one address, the
+  one the trusted proxy overwrote it with. A chain with more than one
+  address is ignored: a client that prepends an address to it produces the
+  same chain as a proxy that appends to it, so the gateway cannot tell
+  which part of the chain the proxy wrote. Taking an address of such a
+  chain let a client supply the address the gateway binds the credentials
+  of a session to, which made a stolen `.rdp` file usable from another
+  network behind a proxy. Proxies that forward the header have to
+  overwrite it (`proxy_set_header X-Forwarded-For $remote_addr;` in nginx).
+- A rule of the access section that selects a group also applies to the
+  users whose group membership the gateway does not know. It did not apply
+  to them before, which made a group rule fail open for the users of the
+  authentication methods that cannot deliver a group membership.
+- A rule with `deny: true` refuses the login now, in every authentication
+  method. It refused the hosts of a user before, the user could still log
+  in and download an `.rdp` file.
+- The camera and the USB devices of the client are their own resources:
+  `Caps.EnableCamera` and `Caps.EnableUsb` allow them, the device
+  redirection (`Caps.EnablePnp`) does not imply them anymore. The
+  `devicestoredirect` setting of the `.rdp` file lists the device types
+  that are allowed.
 
 ### Added
 
@@ -72,9 +86,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   provider.
 - `Header.GroupsHeader` carries the group membership of the user for header
   authentication. The value is a comma separated list of group names.
-- `Caps.EnableSmartCard`, `Caps.EnableWebAuthn` and `Caps.EnableLocation`
-  (`bool`, default `false`) add the smartcard, WebAuthn and location
-  redirection to the redirect policy of the gateway.
+- `Caps.EnableSmartCard`, `Caps.EnableWebAuthn`, `Caps.EnableLocation`,
+  `Caps.EnableCamera` and `Caps.EnableUsb` (`bool`, default `false`) add
+  the smartcard, WebAuthn, location, camera and USB redirection to the
+  redirect policy of the gateway.
 - `Security.PAATokenLifetime`, `Security.UserTokenLifetime` and
   `Security.QueryTokenLifetime` (`int`, minutes, default `5`) make the
   lifetime of the credentials the gateway hands out configurable.

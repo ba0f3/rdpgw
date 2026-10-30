@@ -57,6 +57,8 @@ Caps:
   EnableSmartCard: false
   EnableWebAuthn: false
   EnableLocation: false
+  EnableCamera: false
+  EnableUsb: false
 ```
 
 | Setting | Resource | Enforced on the wire |
@@ -69,6 +71,8 @@ Caps:
 | `EnableSmartCard` | the smartcards of the client | no, client side only |
 | `EnableWebAuthn` | the WebAuthn prompts of the client | no, client side only |
 | `EnableLocation` | the location information of the client | no, client side only |
+| `EnableCamera` | the cameras of the client | no, client side only |
+| `EnableUsb` | the USB devices of the client | no, client side only |
 
 The resources without a wire enforcement are controlled by the settings of
 the `.rdp` file only. The RDP gateway protocol has no flag for them, the
@@ -78,6 +82,12 @@ gateway cannot refuse them. The signature of the `.rdp` file does not cover
 advisory when the file travels through an untrusted channel. Sign the file
 with `client.signingcert` and `client.signingkey` to protect the rest.
 
+The device redirection of the client is listed per device type: the camera
+and the USB devices of the client are their own resources, they are not
+implied by `EnablePnp`. The `devicestoredirect` setting of the `.rdp` file
+lists the device types that are allowed (`port`, `smartcard`, `usb`,
+`camera`), the wildcard is only used when every type is allowed.
+
 `caps.disableredirect` disables every redirection at once, `caps.redirectall`
 enables every redirection at once. They are mutually exclusive, the disable
 switch wins.
@@ -85,7 +95,9 @@ switch wins.
 ### Per user and per group rules
 
 The `access` section holds the rules. The rules are evaluated in order and
-the **first rule that matches the user applies**.
+the **first rule that matches the user applies**. A rule with `deny: true`
+wins over every other rule: a denied user cannot log in, cannot download an
+`.rdp` file and cannot reach any host.
 
 ```yaml
 Access:
@@ -116,8 +128,16 @@ A rule without `Users` and without `Groups` is refused when the gateway
 starts, a rule like that would match every user.
 
 A rule with `deny: true` refuses the matching users access to the gateway
-completely: they have no redirect permissions and none of the hosts are
-reachable for them. It is the way to keep a user or a group out.
+completely: they cannot log in and none of the hosts is reachable for them.
+It is the way to keep a user or a group out.
+
+A rule that selects a **group** also applies to the users whose group
+membership the gateway does not know: the gateway cannot tell whether they
+are a member of the group, and a rule that selects a group must not fail
+open for them. The authentication methods that cannot deliver a group
+membership (Kerberos, NTLM and the local authentication) are therefore
+matched by the `groups` of a rule as well — plan for that, or use `users`
+for those deployments.
 
 The host list of a rule may contain the `{{ preferred_username }}`
 placeholder, it is replaced with the name of the user.
@@ -143,6 +163,28 @@ port of the requested host is ignored when the rule does not carry one, so
 `10.0.0.1` matches a connection to `10.0.0.1:3389`. A rule that carries a
 port pins the endpoint, `10.0.0.1:3389` does not match a connection to
 `10.0.0.1:3390`.
+
+## The client address behind a proxy
+
+The gateway binds the credentials of a session to the address of the client.
+Behind a reverse proxy that address comes from the `X-Forwarded-For` header,
+which the gateway only honors when the request arrives from one of the
+`server.trustedproxies`.
+
+The proxy has to **overwrite** the header with the address of the client:
+
+```nginx
+proxy_set_header X-Forwarded-For $remote_addr;
+```
+
+A header with more than one address is ignored: a client that prepends an
+address to it produces the same chain as a proxy that appends to it, so the
+gateway cannot tell which part of the chain the proxy wrote. The gateway
+falls back to the address of the socket peer in that case and logs it.
+
+List the addresses of the proxies in `server.trustedproxies`, not a range
+that contains the clients as well: a client that reaches the gateway from an
+address in that range can supply the header itself.
 
 ## The group allow-list
 

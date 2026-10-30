@@ -37,6 +37,8 @@ func TestApplyRedirectPolicyAllowed(t *testing.T) {
 		Printer:   true,
 		Port:      true,
 		Pnp:       true,
+		Camera:    true,
+		Usb:       true,
 	})
 
 	s := b.String()
@@ -47,10 +49,60 @@ func TestApplyRedirectPolicyAllowed(t *testing.T) {
 		"redirectcomports:i:1" + CRLF,
 		"drivestoredirect:s:*" + CRLF,
 		"devicestoredirect:s:*" + CRLF,
+		"camerastoredirect:s:*" + CRLF,
+		"usbdevicestoredirect:s:*" + CRLF,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered file does not contain %q, got:\n%s", want, s)
 		}
+	}
+}
+
+// The camera and the USB devices of the client are their own resources,
+// the device redirection does not imply them.
+func TestApplyRedirectPolicyCameraAndUsbAreIndependent(t *testing.T) {
+	b := NewBuilder()
+	b.ApplyRedirectPolicy(access.Policy{
+		Pnp:    true,
+		Usb:    true,
+		Camera: false,
+	})
+
+	s := b.String()
+
+	deviceList := ""
+	for _, line := range strings.Split(s, CRLF) {
+		if strings.HasPrefix(line, "devicestoredirect:s:") {
+			deviceList = strings.TrimPrefix(line, "devicestoredirect:s:")
+		}
+	}
+
+	if deviceList != "usb" {
+		t.Errorf("the device list is %q, want usb", deviceList)
+	}
+	if !strings.Contains(s, "camerastoredirect:s:"+CRLF) {
+		t.Errorf("the camera is not disabled, got:\n%s", s)
+	}
+	if !strings.Contains(s, "usbdevicestoredirect:s:*"+CRLF) {
+		t.Errorf("the usb devices are not allowed, got:\n%s", s)
+	}
+}
+
+// The device redirection without a device type does not redirect anything.
+func TestApplyRedirectPolicyPnpWithoutTypes(t *testing.T) {
+	b := NewBuilder()
+	b.ApplyRedirectPolicy(access.Policy{Pnp: true})
+
+	s := b.String()
+
+	if !strings.Contains(s, "devicestoredirect:s:"+CRLF) {
+		t.Errorf("the device list is not empty, got:\n%s", s)
+	}
+	if !strings.Contains(s, "camerastoredirect:s:"+CRLF) {
+		t.Errorf("the camera is not disabled, got:\n%s", s)
+	}
+	if !strings.Contains(s, "usbdevicestoredirect:s:"+CRLF) {
+		t.Errorf("the usb devices are not disabled, got:\n%s", s)
 	}
 }
 

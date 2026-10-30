@@ -122,7 +122,6 @@ func (h *Header) Authenticated(next http.Handler) http.Handler {
 
 		// Set identity for downstream processing
 		id.SetUserName(userName)
-		id.SetAuthenticated(true)
 		id.SetAuthTime(time.Now())
 
 		// Set optional user attributes from headers
@@ -149,6 +148,16 @@ func (h *Header) Authenticated(next http.Handler) http.Handler {
 				id.SetGroups(splitGroups(groups))
 			}
 		}
+
+		// The access policy can refuse the user even when the proxy
+		// authenticated them. The user is not marked as authenticated
+		// before the check, a refused user must not end up with a
+		// session.
+		if refuseDeniedUser(w, id) {
+			return
+		}
+
+		id.SetAuthenticated(true)
 
 		// Save the session identity
 		if err := SaveSessionIdentity(r, w, id); err != nil {

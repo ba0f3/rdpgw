@@ -191,6 +191,14 @@ type RDGCapsConfig struct {
 	// EnableLocation allows the location information of the client to be
 	// redirected into the session. It is off by default.
 	EnableLocation bool `koanf:"enablelocation"`
+	// EnableCamera allows the cameras of the client to be redirected into
+	// the session. It is off by default, the device redirection of the
+	// client does not imply it.
+	EnableCamera bool `koanf:"enablecamera"`
+	// EnableUsb allows the USB devices of the client to be redirected into
+	// the session. It is off by default, the device redirection of the
+	// client does not imply it.
+	EnableUsb bool `koanf:"enableusb"`
 }
 
 // AccessConfig holds the per user and per group access rules.
@@ -231,6 +239,8 @@ type AccessRedirect struct {
 	EnableSmartCard *bool `koanf:"enablesmartcard"`
 	EnableWebAuthn  *bool `koanf:"enablewebauthn"`
 	EnableLocation  *bool `koanf:"enablelocation"`
+	EnableCamera    *bool `koanf:"enablecamera"`
+	EnableUsb       *bool `koanf:"enableusb"`
 }
 
 type SecurityConfig struct {
