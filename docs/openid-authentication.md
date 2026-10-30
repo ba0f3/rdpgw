@@ -29,6 +29,18 @@ Caps:
 5. Gateway validates token and generates RDP file with temporary credentials
 6. User downloads RDP file and connects using remote desktop client
 
+## Fresh authentication and persistent credentials
+
+Each login requests `prompt=login`, `max_age=0`, a nonce and PKCE S256. The
+callback requires a matching nonce and a fresh `auth_time` in the signed ID token.
+The provider must support these OpenID Connect controls. Browser expiry is
+enforced by the server even when a client retains its raw cookie.
+
+For 30-day `.rdp` files, individual and user-wide revocation, restart persistence
+and current Keycloak group checks, use
+[persistent Keycloak credentials](persistent-credentials.md). The short-lived
+JWT mode retains a snapshot of groups until its credentials expire.
+
 ## Multi-Factor Authentication (MFA)
 
 RDPGW provides multi-factor authentication out of the box with OpenID Connect integration. Configure MFA in your identity provider to enhance security.

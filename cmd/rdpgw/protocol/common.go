@@ -19,6 +19,8 @@ const (
 	maxFragmentSize = 65536
 )
 
+var errIncompleteFrame = errors.New("incomplete frame")
+
 type RedirectFlags struct {
 	Clipboard  bool
 	Port       bool
@@ -30,33 +32,45 @@ type RedirectFlags struct {
 }
 
 func handleMsgFrame(packet *packetReader) *message {
-	pt, sz, msg, err := readHeader(packet.getPtr())
-	if err == nil {
-		packet.incrementPtr(int(sz))
-		return &message{packetType: int(pt), length: int(sz), msg: msg, err: nil}
-	}
-
-	buf := make([]byte, maxFragmentSize)
-	index := 0
+	var buf []byte
 	for {
-		// keep parsing thfragment
-		if len(packet.getPtr()) > len(buf[index:]) {
-			return &message{packetType: int(pt), length: int(sz), msg: msg, err: fmt.Errorf("fragment exceeded max fragment size")}
+		data := packet.getPtr()
+		if len(buf) == 0 {
+			pt, sz, msg, err := readHeader(data)
+			if err == nil {
+				packet.incrementPtr(int(sz))
+				return &message{packetType: int(pt), length: int(sz), msg: msg}
+			}
+			if !errors.Is(err, errIncompleteFrame) {
+				return &message{err: err}
+			}
+			buf = make([]byte, 0, headerLen+maxFragmentSize)
 		}
-		index += copy(buf[index:], packet.getPtr())
-		// Get a new frame
-		err := packet.read()
-		if err != nil {
-			// Failed to make a msg
-			return &message{packetType: int(pt), length: int(sz), msg: msg, err: err}
+		needed := headerLen - len(buf)
+		if needed <= 0 {
+			_, sz, _, err := readHeader(buf)
+			if !errors.Is(err, errIncompleteFrame) {
+				return &message{err: err}
+			}
+			needed = int(sz) - len(buf)
 		}
-		pt, sz, msg, err = readHeader(append(buf[:index], packet.getPtr()...))
+		n := min(needed, len(data))
+		buf = append(buf, data[:n]...)
+		packet.incrementPtr(n)
+		pt, sz, msg, err := readHeader(buf)
 		if err == nil {
-			// the increment is based upon how much of the data we have used
-			// in this packet. The index tells us how much is in the previous frame(s),
-			// So we remove that from the size of the message.
-			packet.incrementPtr(int(sz) - index)
-			return &message{packetType: int(pt), length: int(sz), msg: msg, err: nil}
+			return &message{packetType: int(pt), length: int(sz), msg: msg}
+		}
+		if !errors.Is(err, errIncompleteFrame) {
+			return &message{err: err}
+		}
+		if !packet.hasMoreData() {
+			if err := packet.read(); err != nil {
+				return &message{err: err}
+			}
+			if !packet.hasMoreData() {
+				return &message{err: io.ErrNoProgress}
+			}
 		}
 	}
 }
@@ -75,6 +89,9 @@ func readMessage(in transport.Transport) ([]*message, error) {
 	var message *message
 	for packet.hasMoreData() {
 		message = handleMsgFrame(packet)
+		if message.err != nil {
+			return messages, message.err
+		}
 		messages = append(messages, message)
 	}
 	return messages, nil
@@ -100,7 +117,7 @@ func createPacket(pktType uint16, data []byte) (packet []byte) {
 // is invalid and rejected before slicing.
 func readHeader(data []byte) (packetType uint16, size uint32, packet []byte, err error) {
 	if len(data) < headerLen {
-		return 0, 0, nil, errors.New("header too short, fragment likely")
+		return 0, 0, nil, errIncompleteFrame
 	}
 	r := bytes.NewReader(data)
 	binary.Read(r, binary.LittleEndian, &packetType)
@@ -110,7 +127,7 @@ func readHeader(data []byte) (packetType uint16, size uint32, packet []byte, err
 		return packetType, size, nil, fmt.Errorf("invalid declared size %d", size)
 	}
 	if len(data) < int(size) {
-		return packetType, size, data[headerLen:], errors.New("data incomplete, fragment received")
+		return packetType, size, data[headerLen:], errIncompleteFrame
 	}
 	return packetType, size, data[headerLen:size], nil
 }

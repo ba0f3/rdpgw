@@ -27,7 +27,9 @@ type testProvider struct {
 	server *httptest.Server
 	key    *rsa.PrivateKey
 	// groups are the groups of the user the ID token is issued for.
-	groups []string
+	groups   []string
+	authTime int64
+	nonce    string
 }
 
 func newTestProvider(t *testing.T, groups []string) *testProvider {
@@ -38,7 +40,7 @@ func newTestProvider(t *testing.T, groups []string) *testProvider {
 		t.Fatalf("cannot generate a key: %v", err)
 	}
 
-	p := &testProvider{key: key, groups: groups}
+	p := &testProvider{key: key, groups: groups, authTime: time.Now().Unix(), nonce: "test-state"}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/keys", func(w http.ResponseWriter, r *http.Request) {
@@ -101,6 +103,8 @@ func (p *testProvider) idToken() (string, error) {
 	custom := map[string]interface{}{
 		"preferred_username": "alice",
 		"groups":             p.groups,
+		"auth_time":          p.authTime,
+		"nonce":              p.nonce,
 	}
 
 	token, err := jwt.Signed(signer).Claims(claims).Claims(custom).Serialize()

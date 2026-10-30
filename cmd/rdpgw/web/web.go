@@ -12,17 +12,16 @@ import (
 	"html/template"
 	"log"
 	rnd "math/rand"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/andrewheberle/rdpsign"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/access"
+	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/destination"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/identity"
 	"github.com/bolkedebruin/rdpgw/cmd/rdpgw/rdp"
 )
@@ -109,88 +108,7 @@ type Handler struct {
 	templatesPath      string
 	webConfig          *WebConfig
 	htmlTemplate       *template.Template
-	destPolicy         destinationPolicy
-}
-
-// destinationPolicy gates the host strings accepted in `any` host-selection
-// mode. With `signed` / `unsigned` / `roundrobin` the operator curates the
-// hosts list; with `any` the value comes from the request, so the gateway
-// must ensure it isn't being asked to act as a TCP relay against an
-// internal-only target.
-type destinationPolicy struct {
-	allowedPorts             map[int]struct{}
-	allowPrivateDestinations bool
-}
-
-func newDestinationPolicy(allowedPorts []int, allowPrivate bool) destinationPolicy {
-	if len(allowedPorts) == 0 {
-		allowedPorts = []int{3389}
-	}
-	set := make(map[int]struct{}, len(allowedPorts))
-	for _, p := range allowedPorts {
-		set[p] = struct{}{}
-	}
-	return destinationPolicy{
-		allowedPorts:             set,
-		allowPrivateDestinations: allowPrivate,
-	}
-}
-
-// allow validates a host:port (or bare host) string against the policy.
-// Returns nil if the destination is acceptable, an error otherwise. The
-// zero-value policy is treated as the secure default ({3389}, public-only).
-func (p destinationPolicy) allow(hostport string) error {
-	host, port, err := net.SplitHostPort(hostport)
-	if err != nil {
-		// no port present -- assume the protocol default
-		host = hostport
-		port = "3389"
-	}
-	portNum, err := strconv.Atoi(port)
-	if err != nil {
-		return fmt.Errorf("invalid port %q in %q", port, hostport)
-	}
-	allowedPorts := p.allowedPorts
-	if len(allowedPorts) == 0 {
-		allowedPorts = map[int]struct{}{3389: {}}
-	}
-	if _, ok := allowedPorts[portNum]; !ok {
-		return fmt.Errorf("port %d not in allow-list", portNum)
-	}
-
-	if p.allowPrivateDestinations {
-		return nil
-	}
-
-	if ip := net.ParseIP(host); ip != nil {
-		return checkPublicIP(host, ip)
-	}
-	addrs, err := net.LookupIP(host)
-	if err != nil {
-		return fmt.Errorf("cannot resolve %q: %s", host, err)
-	}
-	for _, ip := range addrs {
-		if err := checkPublicIP(host, ip); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func checkPublicIP(host string, ip net.IP) error {
-	switch {
-	case ip.IsLoopback():
-		return fmt.Errorf("destination %q (%s) is loopback", host, ip)
-	case ip.IsPrivate():
-		return fmt.Errorf("destination %q (%s) is in a private range", host, ip)
-	case ip.IsLinkLocalUnicast():
-		return fmt.Errorf("destination %q (%s) is link-local", host, ip)
-	case ip.IsUnspecified():
-		return fmt.Errorf("destination %q (%s) is unspecified", host, ip)
-	case ip.IsMulticast():
-		return fmt.Errorf("destination %q (%s) is multicast", host, ip)
-	}
-	return nil
+	destPolicy         destination.Policy
 }
 
 func (c *Config) NewHandler() *Handler {
@@ -210,7 +128,7 @@ func (c *Config) NewHandler() *Handler {
 		rdpOpts:            c.RdpOpts,
 		rdpDefaults:        c.TemplateFile,
 		templatesPath:      c.TemplatesPath,
-		destPolicy:         newDestinationPolicy(c.AllowedDestinationPorts, c.AllowPrivateDestinations),
+		destPolicy:         destination.New(c.AllowedDestinationPorts, c.AllowPrivateDestinations),
 	}
 
 	// set up RDP signer if config values are set
@@ -548,7 +466,7 @@ func (h *Handler) selectHost(ctx context.Context, u *url.URL) (string, error) {
 		if !ok {
 			return "", errors.New("invalid query parameter")
 		}
-		if err := h.destPolicy.allow(hosts[0]); err != nil {
+		if err := h.destPolicy.Allow(ctx, hosts[0]); err != nil {
 			log.Printf("rejecting `any` destination %q: %s", hosts[0], err)
 			return "", fmt.Errorf("destination not allowed: %s", err)
 		}
@@ -561,6 +479,7 @@ func (h *Handler) selectHost(ctx context.Context, u *url.URL) (string, error) {
 func (h *Handler) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	id := identity.FromRequestCtx(r)
 	ctx := r.Context()
+	w.Header().Set("Cache-Control", "no-store")
 
 	opts := h.rdpOpts
 
@@ -663,9 +582,8 @@ func (h *Handler) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The redirect settings of the file follow the access policy of the
-	// user. The gateway enforces the same policy in the tunnel
-	// authorization response, the file only makes the client side
-	// consistent with it.
+	// user. The tunnel authorization response advertises the same settings.
+	// Destination hosts enforce them against clients that ignore the flags.
 	d.ApplyRedirectPolicy(access.Current().PolicyFor(id))
 
 	if !h.rdpOpts.NoUsername {

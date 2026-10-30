@@ -213,9 +213,9 @@ func TestPAATokenPolicyIsNarrowedByTheGateway(t *testing.T) {
 	}
 }
 
-// A token without a redirect policy is refused. The gateway does not know
-// what the user was allowed to do, it does not guess.
-func TestPAATokenWithoutPolicyIsRefused(t *testing.T) {
+// Legacy tokens without a redirect claim advertise DisableAll. Persistent
+// credential mode rejects legacy tokens entirely.
+func TestLegacyPAATokenWithoutPolicyDisablesRedirection(t *testing.T) {
 	SigningKey = []byte("5aa3a1568fe8421cd7e127d5ace28d2d")
 	VerifyClientIP = false
 

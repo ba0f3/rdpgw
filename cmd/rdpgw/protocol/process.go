@@ -139,7 +139,11 @@ func (p *Processor) Process(ctx context.Context) error {
 					}
 				}
 				log.Printf("Establishing connection to RDP server: %s", host)
-				p.tunnel.rwc, err = net.DialTimeout("tcp", host, time.Second*15)
+				if p.gw.DialHost != nil {
+					p.tunnel.rwc, err = p.gw.DialHost(ctx, host)
+				} else {
+					p.tunnel.rwc, err = (&net.Dialer{Timeout: 15 * time.Second}).DialContext(ctx, "tcp", host)
+				}
 				if err != nil {
 					log.Printf("Error connecting to %s, %s", host, err)
 					msg := p.channelResponse(E_PROXY_INTERNALERROR)
@@ -291,7 +295,8 @@ func (p *Processor) tunnelAuthResponse(errorCode int) []byte {
 
 	// The redirect flags of the session take precedence over the default
 	// policy of the gateway. They are the resolved policy of the user and
-	// are therefore enforced by the gateway and not by the client.
+	// are advertised by the gateway. Destination hosts must enforce them
+	// against clients that ignore the flags.
 	flags := p.gw.RedirectFlags
 	if p.tunnel.RedirectFlags != nil {
 		flags = *p.tunnel.RedirectFlags

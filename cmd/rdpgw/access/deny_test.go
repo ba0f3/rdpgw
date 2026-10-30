@@ -33,8 +33,8 @@ func TestGroupRuleAppliesWithoutKnownMembership(t *testing.T) {
 	if engine.HostAllowed(unknown, "10.0.0.1") {
 		t.Errorf("a user without a known group membership must be restricted by the group rule")
 	}
-	if !engine.HostAllowed(unknown, "10.0.0.9") {
-		t.Errorf("the host of the group rule must be allowed")
+	if engine.HostAllowed(unknown, "10.0.0.9") {
+		t.Errorf("unknown membership must not inherit a group allow rule")
 	}
 }
 
@@ -115,10 +115,9 @@ func TestUserRuleDoesNotNeedGroupMembership(t *testing.T) {
 		t.Errorf("alice must be allowed to connect to her host")
 	}
 
-	// bob does not match by name and the membership is unknown, the rule
-	// does not apply to him
-	if !engine.HostAllowed(testUser("bob"), "10.0.0.1") {
-		t.Errorf("the rule of alice must not restrict bob")
+	// bob has no explicit allow and his membership is unknown.
+	if engine.HostAllowed(testUser("bob"), "10.0.0.1") {
+		t.Errorf("unknown group membership must not grant bob access")
 	}
 }
 

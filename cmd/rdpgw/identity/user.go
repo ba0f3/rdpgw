@@ -132,6 +132,7 @@ func (u *User) Groups() []string {
 // SetGroups replaces the group membership of the user. Empty group names are
 // ignored.
 func (u *User) SetGroups(groups []string) {
+	u.SetAttribute(AttrGroupsKnown, groups != nil)
 	membership := make(map[string]bool, len(groups))
 	for _, group := range groups {
 		group = strings.TrimSpace(group)

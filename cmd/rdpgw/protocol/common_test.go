@@ -169,9 +169,8 @@ func TestDroppedBytes(t *testing.T) {
 	transport.addPacket(p1)
 
 	messages, err := readMessage(transport)
-	assert.Nil(t, err)
-	assert.Len(t, messages, 1)
-	assert.NotNil(t, messages[0].err)
+	assert.NotNil(t, err)
+	assert.Empty(t, messages)
 
 	_, err = readMessage(transport)
 	// no more packets
@@ -190,11 +189,10 @@ func TestTooMuchData(t *testing.T) {
 	transport.addPacket(p1)
 
 	messages, err := readMessage(transport)
-	assert.Nil(t, err)
+	assert.NotNil(t, err)
 	assert.NotNil(t, messages)
-	assert.Len(t, messages, 2)
+	assert.Len(t, messages, 1)
 	assert.Nil(t, messages[0].err)
-	assert.NotNil(t, messages[1].err)
 
 	_, err = readMessage(transport)
 	// no more packets
@@ -259,9 +257,8 @@ func TestFragmentTooLarge(t *testing.T) {
 	}
 
 	messages, err := readMessage(transport)
-	assert.Nil(t, err)
-	assert.NotNil(t, messages[0].err)
-	assert.Contains(t, "fragment exceeded max fragment size", messages[0].err.Error())
+	assert.ErrorContains(t, err, "invalid declared size")
+	assert.Empty(t, messages)
 }
 
 // TestReadHeaderRejectsUndersizedSize checks that readHeader rejects a
